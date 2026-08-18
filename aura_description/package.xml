@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>aura_robot_description</name>
+  <version>1.0.0</version>
+  <description>AuraVLA robot description files</description>
+  <maintainer email="eva@example.com">AuraVLA Team</maintainer>
+  <license>Apache-2.0</license>
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -1,0 +1,16 @@
+# Goal
+TaskRequest request
+TaskPlan plan
+
+---
+# Result
+bool success
+string message
+string result_json
+
+---
+# Feedback
+uint32 current_action
+string state
+float32 progress
+string message

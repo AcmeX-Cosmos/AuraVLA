@@ -1,0 +1,19 @@
+# Planning Configuration
+planning:
+  max_actions: 10
+  supported_tasks:
+    - pick_and_place
+
+  # Schema validation
+  schema_version: "1.0"
+
+  # Forbidden motion command keys
+  forbidden_keys:
+    - control
+    - grasp_pose
+    - ik
+    - joint_positions
+    - pose
+    - trajectory
+    - velocity
+    - waypoints

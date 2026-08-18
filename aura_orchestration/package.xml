@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>aura_orchestration</name>
+  <version>1.0.0</version>
+  <description>AuraVLA orchestration module for closed-loop control</description>
+  <maintainer email="eva@example.com">AuraVLA Team</maintainer>
+  <license>Apache-2.0</license>
+  <depend>rclpy</depend>
+  <depend>aura_interfaces</depend>
+  <depend>rclpy_action</depend>
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

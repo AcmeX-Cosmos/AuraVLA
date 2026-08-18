@@ -1,0 +1,15 @@
+# Execution Configuration
+execution:
+  # Task bridge settings
+  bridge:
+    directory: "/tmp/eva-agent-control"
+    request_file: "request.json"
+    response_file: "response.json"
+    status_file: "status.json"
+    timeout_sec: 300.0
+    check_interval_sec: 0.5
+
+  # Executor settings
+  executor:
+    max_retries: 2
+    retry_delay_sec: 1.0

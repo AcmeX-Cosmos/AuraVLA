@@ -1,0 +1,9 @@
+# Request
+TaskRequest request
+
+---
+# Response
+bool doable
+float32 confidence
+string reason
+string[] required_objects

@@ -1,0 +1,1226 @@
+from __future__ import annotations
+
+import argparse
+import base64
+from collections.abc import Mapping, Sequence
+from http.client import RemoteDisconnected
+from io import BytesIO
+import json
+import os
+import re
+from dataclasses import dataclass
+from pathlib import Path
+import sys
+import time
+from typing import Any, Protocol
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+# AuraVLA ROS2 structure imports
+_aura_root = Path(__file__).resolve().parent.parent.parent.parent.parent
+_camera_bridge_path = _aura_root / "aura_hardware" / "eva_camera_bridge"
+_isaac_bridge_path = _aura_root / "aura_hardware" / "eva_isaac_bridge"
+_execution_path = _aura_root / "aura_execution" / "aura_execution" / "eva_execution"
+_planning_path = _aura_root / "aura_planning" / "aura_planning" / "eva_planning"
+
+# Add all required paths to sys.path
+for _p in [_camera_bridge_path, _isaac_bridge_path, _execution_path, _planning_path]:
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
+# Import modules
+try:
+    from camera_bridge import camera_bridge_paths
+except ImportError:
+    # Fallback: camera_bridge_paths as simple function
+    def camera_bridge_paths(directory=None):
+        from dataclasses import dataclass
+        @dataclass(frozen=True)
+        class CameraBridgePaths:
+            directory: Path
+            rgb: Path
+            depth: Path
+            metadata: Path
+
+        _dir = Path(directory) if directory else Path('/tmp/aura_camera')
+        return CameraBridgePaths(
+            directory=_dir,
+            rgb=_dir / 'rgb.png',
+            depth=_dir / 'depth.npy',
+            metadata=_dir / 'metadata.json',
+        )
+
+from isaac_runtime import IsaacRuntimeConfig, IsaacRuntimeLauncher
+from task_bridge import FileTaskClient
+from planner import TaskPlanner
+from schemas import dumps_json, loads_json
+
+# Import scene_names from current package
+if __package__:
+    from .scene_names import SceneNameResolver
+else:
+    from scene_names import SceneNameResolver
+
+
+SYSTEM_PROMPT = """Return one compact JSON object only. Understand the user instruction
+and the RGBD robot scene; RGB is above a colored depth strip where warmer colors
+indicate nearer pixels.
+
+The current attached RGB image is authoritative and replaces scene information from
+older turns. For questions asking what is in the scene, inspect the current RGB image
+carefully and list every clearly visible movable object and container with color and
+relative image position. Do not describe RGBD encoding, depth colors, or camera data
+unless explicitly asked. Do not claim an object that is not visible in the current RGB.
+
+IMPORTANT: Scene objects may have multiple names. When the user refers to an
+object that doesn't exactly match what you see, map to the closest visible container:
+- "篮子 / basket" -> the visible purple box / small crate near the table. Use the actual
+  visible object name (如 "紫色盒子") as target_container when user says "篮子".
+- General rule: if user says a container name that doesn't match, use the visible
+  container on the table. Do NOT reject the task for name mismatches.
+
+First detect action intent. Words such as move, take, put, pick, place, 拿, 放, 移动,
+抓, and 搬 always mean a robot request, never conversation. For robot requests set
+doable=true, task=pick_and_place, target_objects to concrete visible names, and
+target_container to the semantic destination. The deterministic planner creates actions.
+
+Only when no robot action is requested, set doable=false and task=conversation, then
+write the answer in response using the user's language. Resolve colors, sizes, and groups from
+the image. If a requested object or target is ambiguous or missing, set doable=false and
+explain why in reason. Map right/右边/右侧 to right_zone and left/左边/左侧 to left_zone.
+Never output poses, IK, joints, trajectories, waypoints, control code, or Markdown.
+Use schema_version 1.0. Omit actions, attributes, constraints, and reason when unnecessary."""
+
+SCENE_INSPECTION_PROMPT = """Inspect only the current attached RGB image. Return one
+compact JSON object with exactly one top-level field named scene_objects. Its value is
+an array containing every clearly visible distinct physical object, including tools,
+containers, cups, cans, and fruit, but excluding the table and background. Each item
+must contain object, color, and position. Use the user's language for object names and
+positions. Do not propose, infer, or describe any robot action. Do not discuss image
+encoding, depth, cameras, metadata, or previous turns. Do not output Markdown.
+Example shape: {"scene_objects":[{"object":"杯子","color":"绿色","position":"上方"}]}
+"""
+
+DEFAULT_NVIDIA_MODEL = "nvidia/nemotron-nano-12b-v2-vl"
+DEFAULT_NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
+DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent.parent / "aura_bringup" / "config" / "config.yaml"
+
+
+class VLMBackend(Protocol):
+    def load(self) -> None:
+        ...
+
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        rgb_image: Any | None,
+        depth_image: Any | None,
+        history: Sequence[Mapping[str, str]] = (),
+    ) -> str:
+        ...
+
+
+@dataclass(frozen=True)
+class NvidiaConfig:
+    model_name_or_path: str = DEFAULT_NVIDIA_MODEL
+    base_url: str = DEFAULT_NVIDIA_BASE_URL
+    api_key: str | None = None
+    max_tokens: int = 4096
+    temperature: float = 1.0
+    top_p: float = 1.0
+    frequency_penalty: float = 0.0
+    presence_penalty: float = 0.0
+    request_timeout_sec: float = 300.0
+    max_retries: int = 3
+    retry_backoff_sec: float = 1.0
+    image_max_edge: int = 448
+    max_history_messages: int = 6
+
+    @classmethod
+    def from_mapping(cls, settings: Mapping[str, Any]) -> "NvidiaConfig":
+        nvidia = settings.get("nvidia", {})
+        agent = settings.get("agent", {})
+        if not isinstance(nvidia, Mapping) or not isinstance(agent, Mapping):
+            raise ValueError("config sections 'nvidia' and 'agent' must be objects")
+        configured_key = nvidia.get("api_key")
+        api_key = os.getenv("NVIDIA_API_KEY") or (
+            str(configured_key).strip() if configured_key else None
+        )
+        return cls(
+            model_name_or_path=str(nvidia.get("model", DEFAULT_NVIDIA_MODEL)),
+            base_url=str(nvidia.get("base_url", DEFAULT_NVIDIA_BASE_URL)),
+            api_key=_normalize_api_key(api_key),
+            max_tokens=int(nvidia.get("max_tokens", 4096)),
+            temperature=float(nvidia.get("temperature", 1.0)),
+            top_p=float(nvidia.get("top_p", 1.0)),
+            frequency_penalty=float(nvidia.get("frequency_penalty", 0.0)),
+            presence_penalty=float(nvidia.get("presence_penalty", 0.0)),
+            request_timeout_sec=float(nvidia.get("request_timeout_sec", 300.0)),
+            max_retries=int(nvidia.get("max_retries", 3)),
+            retry_backoff_sec=float(nvidia.get("retry_backoff_sec", 1.0)),
+            image_max_edge=int(agent.get("image_max_edge", 448)),
+            max_history_messages=int(agent.get("max_history_messages", 6)),
+        )
+
+    @classmethod
+    def from_yaml(cls, config_path: str | Path) -> "NvidiaConfig":
+        return cls.from_mapping(_load_yaml_config(config_path))
+
+
+class RGBDImageEncoder:
+    def __init__(self, max_edge: int) -> None:
+        self._max_edge = max_edge
+
+    def _image_to_base64(self, image: Any, *, is_depth: bool) -> str:
+        if isinstance(image, (str, Path)):
+            path = Path(image).expanduser()
+            if not path.is_file():
+                raise FileNotFoundError(f"Image does not exist: {path}")
+            try:
+                import cv2
+            except ImportError:
+                return base64.b64encode(path.read_bytes()).decode("ascii")
+
+            array = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+            if array is None:
+                raise RuntimeError(f"OpenCV failed to read image: {path}")
+            if is_depth and array.dtype != "uint8":
+                array = self._normalize_depth(array)
+            max_edge = self._max_edge
+            height, width = array.shape[:2]
+            if max_edge > 0 and max(height, width) > max_edge:
+                scale = max_edge / max(height, width)
+                array = cv2.resize(
+                    array,
+                    (max(1, round(width * scale)), max(1, round(height * scale))),
+                    interpolation=cv2.INTER_AREA,
+                )
+            encoded, buffer = cv2.imencode(".png", array)
+            if not encoded:
+                raise RuntimeError(f"OpenCV failed to encode image: {path}")
+            return base64.b64encode(buffer.tobytes()).decode("ascii")
+
+        try:
+            from PIL import Image
+        except ImportError:
+            Image = None
+        if Image is not None and isinstance(image, Image.Image):
+            output = BytesIO()
+            image.convert("RGB").save(output, format="PNG")
+            return base64.b64encode(output.getvalue()).decode("ascii")
+
+        try:
+            import cv2
+            import numpy as np
+        except ImportError as exc:
+            raise RuntimeError(
+                "Encoding Isaac camera arrays requires numpy and opencv-python"
+            ) from exc
+
+        array = np.asarray(image)
+        if is_depth:
+            array = self._normalize_depth(array)
+        elif array.ndim == 3 and array.shape[2] == 4:
+            array = cv2.cvtColor(array.astype(np.uint8), cv2.COLOR_RGBA2BGRA)
+        elif array.ndim == 3 and array.shape[2] == 3:
+            array = cv2.cvtColor(array.astype(np.uint8), cv2.COLOR_RGB2BGR)
+        else:
+            raise ValueError(f"Unsupported RGB image shape: {array.shape}")
+        max_edge = self._max_edge
+        height, width = array.shape[:2]
+        if max_edge > 0 and max(height, width) > max_edge:
+            scale = max_edge / max(height, width)
+            array = cv2.resize(
+                array,
+                (max(1, round(width * scale)), max(1, round(height * scale))),
+                interpolation=cv2.INTER_AREA,
+            )
+        encoded, buffer = cv2.imencode(".png", array)
+        if not encoded:
+            raise RuntimeError("OpenCV failed to encode image")
+        return base64.b64encode(buffer.tobytes()).decode("ascii")
+
+    def _rgbd_to_base64(self, rgb_image: Any, depth_image: Any) -> str:
+        import cv2
+        import numpy as np
+
+        def decode(encoded_image: str) -> Any:
+            return cv2.imdecode(
+                np.frombuffer(base64.b64decode(encoded_image), dtype=np.uint8),
+                cv2.IMREAD_UNCHANGED,
+            )
+
+        rgb = decode(self._image_to_base64(rgb_image, is_depth=False))
+        depth = decode(self._image_to_base64(depth_image, is_depth=True))
+        if rgb is None or depth is None:
+            raise RuntimeError("OpenCV failed to compose RGBD image")
+        if rgb.ndim == 2:
+            rgb = cv2.cvtColor(rgb, cv2.COLOR_GRAY2BGR)
+        if rgb.shape[2] == 4:
+            rgb = cv2.cvtColor(rgb, cv2.COLOR_BGRA2BGR)
+        if depth.ndim == 3:
+            depth = cv2.cvtColor(depth, cv2.COLOR_BGR2GRAY)
+
+        depth_height = max(48, rgb.shape[0] // 3)
+        depth = cv2.resize(
+            depth,
+            (rgb.shape[1], depth_height),
+            interpolation=cv2.INTER_AREA,
+        )
+        depth_color = cv2.applyColorMap(depth, cv2.COLORMAP_TURBO)
+        composite = np.concatenate([rgb, depth_color], axis=0)
+        encoded, buffer = cv2.imencode(".jpg", composite, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        if not encoded:
+            raise RuntimeError("OpenCV failed to encode RGBD composite")
+        return base64.b64encode(buffer.tobytes()).decode("ascii")
+
+    @staticmethod
+    def _normalize_depth(depth: Any) -> Any:
+        import numpy as np
+
+        array = np.asarray(depth, dtype=np.float32).squeeze()
+        if array.ndim != 2:
+            raise ValueError(f"Expected a depth map, got shape {array.shape}")
+        finite = np.isfinite(array) & (array > 0)
+        normalized = np.zeros(array.shape, dtype=np.uint8)
+        if finite.any():
+            near, far = np.percentile(array[finite], [2.0, 98.0])
+            if far <= near:
+                far = near + 1.0
+            clipped = np.clip(array, near, far)
+            normalized[finite] = (
+                (1.0 - (clipped[finite] - near) / (far - near)) * 255.0
+            ).astype(np.uint8)
+        return normalized
+
+
+class NvidiaBuildBackend:
+    def __init__(self, config: NvidiaConfig) -> None:
+        self._config = config
+        self._image_encoder = RGBDImageEncoder(config.image_max_edge)
+
+    def load(self) -> None:
+        self._api_key()
+
+    def unload(self) -> None:
+        return None
+
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        rgb_image: Any | None,
+        depth_image: Any | None,
+        history: Sequence[Mapping[str, str]] = (),
+    ) -> str:
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_prompt}
+        ]
+        messages.extend(
+            {
+                "role": str(message["role"]),
+                "content": str(message["content"]),
+            }
+            for message in history
+            if message.get("role") in {"user", "assistant"}
+            and message.get("content")
+        )
+
+        content: list[dict[str, Any]] = []
+        if rgb_image is not None and depth_image is not None:
+            encoded_image = self._image_encoder._rgbd_to_base64(
+                rgb_image, depth_image
+            )
+            content.append(self._image_content(encoded_image, "image/jpeg"))
+        elif rgb_image is not None:
+            encoded_image = self._image_encoder._image_to_base64(
+                rgb_image, is_depth=False
+            )
+            content.append(self._image_content(encoded_image, "image/png"))
+        elif depth_image is not None:
+            encoded_image = self._image_encoder._image_to_base64(
+                depth_image, is_depth=True
+            )
+            content.append(self._image_content(encoded_image, "image/png"))
+        content.append({"type": "text", "text": user_prompt})
+        messages.append({"role": "user", "content": content})
+
+        response = self._post_json(
+            "/chat/completions",
+            {
+                "model": self._config.model_name_or_path,
+                "messages": messages,
+                "frequency_penalty": self._config.frequency_penalty,
+                "max_tokens": self._config.max_tokens,
+                "presence_penalty": self._config.presence_penalty,
+                "stream": False,
+                "temperature": self._config.temperature,
+                "top_p": self._config.top_p,
+            },
+        )
+        choices = response.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise RuntimeError(f"Unexpected NVIDIA Build response: {response!r}")
+        message = choices[0].get("message") if isinstance(choices[0], dict) else None
+        content_value = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content_value, str) and content_value.strip():
+            return content_value
+        if isinstance(content_value, list):
+            text_parts = [
+                str(item.get("text", ""))
+                for item in content_value
+                if isinstance(item, dict) and item.get("type") == "text"
+            ]
+            result = "".join(text_parts).strip()
+            if result:
+                return result
+        raise RuntimeError(f"Unexpected NVIDIA Build response: {response!r}")
+
+    def _post_json(self, endpoint: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        url = f"{self._config.base_url.rstrip('/')}{endpoint}"
+        result = None
+        for attempt in range(max(0, self._config.max_retries) + 1):
+            request = Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bearer {self._api_key()}",
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            try:
+                with urlopen(
+                    request, timeout=self._config.request_timeout_sec
+                ) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+                break
+            except HTTPError as exc:
+                body = exc.read().decode("utf-8", errors="replace")
+                retryable = exc.code == 429 or 500 <= exc.code <= 599
+                if retryable and attempt < self._config.max_retries:
+                    print(
+                        f"nvidia> NVIDIA HTTP {exc.code}; retrying "
+                        f"{attempt + 1}/{self._config.max_retries}...",
+                        flush=True,
+                    )
+                    time.sleep(self._config.retry_backoff_sec * (2**attempt))
+                    continue
+                raise RuntimeError(f"NVIDIA Build HTTP {exc.code}: {body}") from exc
+            except (
+                URLError,
+                RemoteDisconnected,
+                ConnectionResetError,
+                TimeoutError,
+            ) as exc:
+                if attempt < self._config.max_retries:
+                    print(
+                        f"nvidia> NVIDIA connection interrupted; retrying "
+                        f"{attempt + 1}/{self._config.max_retries}...",
+                        flush=True,
+                    )
+                    time.sleep(self._config.retry_backoff_sec * (2**attempt))
+                    continue
+                raise RuntimeError(
+                    f"Cannot complete NVIDIA Build request at "
+                    f"{self._config.base_url}: {type(exc).__name__}: {exc}"
+                ) from exc
+        if not isinstance(result, dict):
+            raise RuntimeError(
+                f"NVIDIA Build returned a non-object response: {result!r}"
+            )
+        return result
+
+    def _api_key(self) -> str:
+        api_key = (
+            self._config.api_key or os.getenv("NVIDIA_API_KEY", "")
+        ).strip()
+        if not api_key:
+            raise RuntimeError(
+                "NVIDIA_API_KEY is not set. Generate a key at build.nvidia.com "
+                "and export it before starting S5."
+            )
+        return api_key
+
+    @staticmethod
+    def _image_content(encoded_image: str, media_type: str) -> dict[str, Any]:
+        return {
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:{media_type};base64,{encoded_image}",
+            },
+        }
+
+
+class NvidiaVLAgent:
+    def __init__(
+        self,
+        config: NvidiaConfig | None = None,
+        backend: VLMBackend | None = None,
+        scene_name_resolver: SceneNameResolver | None = None,
+    ) -> None:
+        self.config = config or NvidiaConfig()
+        self._backend = backend or NvidiaBuildBackend(self.config)
+        self._scene_name_resolver = scene_name_resolver or SceneNameResolver.from_mapping()
+        self._history: list[dict[str, str]] = []
+
+    def load(self) -> None:
+        self._backend.load()
+
+    def release_resources(self) -> None:
+        unload = getattr(self._backend, "unload", None)
+        if callable(unload):
+            unload()
+
+    def infer(
+        self,
+        instruction: str,
+        rgb_image: Any | None,
+        depth_image: Any | None = None,
+        context_json: str | None = None,
+    ) -> str:
+        if not instruction.strip():
+            raise ValueError("instruction cannot be empty")
+        scene_inspection = _is_scene_inspection_message(instruction)
+        context = loads_json(context_json) if context_json else {}
+        image_description = (
+            "One RGBD composite is attached: RGB is above a colored depth strip, "
+            "where warmer colors indicate nearer pixels."
+            if rgb_image is not None
+            else "No scene image is attached. Do not assume that any object or container is visible."
+        )
+        user_prompt = (
+            f"User instruction: {instruction.strip()}\n"
+            f"{image_description}\n"
+            f"Previous attempt context: {dumps_json(context)}"
+        )
+        system_prompt = SCENE_INSPECTION_PROMPT if scene_inspection else SYSTEM_PROMPT
+        if not scene_inspection:
+            alias_hints = self._scene_name_resolver.build_alias_hints()
+            if alias_hints:
+                system_prompt = system_prompt + "\n\n" + alias_hints
+        raw_response = self._backend.generate(
+            system_prompt,
+            user_prompt,
+            rgb_image,
+            None if scene_inspection else depth_image,
+            history=() if scene_inspection else self._history,
+        )
+        response = loads_json(raw_response)
+        if scene_inspection:
+            response = _normalize_scene_inventory(response)
+        else:
+            response = _normalize_scene_task_names(
+                response,
+                self._scene_name_resolver,
+            )
+        response = _normalize_directional_targets(response, instruction)
+        if str(response.get("task", "")).strip().lower() == "conversation":
+            response["doable"] = False
+            response.setdefault("schema_version", "1.0")
+        response_json = dumps_json(response)
+        if scene_inspection:
+            self._history.clear()
+        self._history.extend(
+            [
+                {"role": "user", "content": instruction.strip()},
+                {"role": "assistant", "content": response_json},
+            ]
+        )
+        max_messages = max(0, self.config.max_history_messages)
+        if max_messages:
+            self._history = self._history[-max_messages:]
+        else:
+            self._history.clear()
+        return response_json
+
+    def chat(
+        self,
+        message: str,
+        rgb_image: Any | None = None,
+        depth_image: Any | None = None,
+    ) -> str:
+        if _is_text_only_chat_message(message):
+            rgb_image = None
+            depth_image = None
+        return self.infer(message, rgb_image, depth_image)
+
+    def reset_conversation(self) -> None:
+        self._history.clear()
+
+    def conversation_json(self) -> str:
+        return dumps_json({"messages": list(self._history)})
+
+
+def _load_yaml_config(config_path: str | Path) -> dict[str, Any]:
+    path = Path(config_path).expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"S5 config does not exist: {path}")
+    try:
+        import yaml
+    except ImportError as exc:
+        raise RuntimeError(
+            "Reading config.yaml requires PyYAML. Run S5 with Isaac Python."
+        ) from exc
+    loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if loaded is None:
+        return {}
+    if not isinstance(loaded, Mapping):
+        raise ValueError("S5 config root must be a YAML object")
+    return dict(loaded)
+
+
+def _normalize_api_key(api_key: str | None) -> str | None:
+    normalized = (api_key or "").strip()
+    if normalized.lower().startswith("bearer "):
+        normalized = normalized[7:].strip()
+    return normalized or None
+
+
+def _config_section(settings: Mapping[str, Any], name: str) -> Mapping[str, Any]:
+    section = settings.get(name, {})
+    if not isinstance(section, Mapping):
+        raise ValueError(f"config section {name!r} must be an object")
+    return section
+
+
+def main(argv: list[str] | None = None) -> int:
+    raw_argv = list(argv) if argv is not None else sys.argv[1:]
+    config_parser = argparse.ArgumentParser(add_help=False)
+    config_parser.add_argument(
+        "--config",
+        default=os.getenv("S5_CONFIG", str(DEFAULT_CONFIG_PATH)),
+    )
+    config_args, _ = config_parser.parse_known_args(raw_argv)
+    settings = _load_yaml_config(config_args.config)
+    base_config = NvidiaConfig.from_mapping(settings)
+    camera_settings = _config_section(settings, "camera")
+    execution_settings = _config_section(settings, "execution")
+    isaac_settings = _config_section(settings, "isaac")
+    runtime_settings = _config_section(settings, "runtime")
+    scene_settings = _config_section(settings, "scene")
+    agent_settings = _config_section(settings, "agent")
+    quick_commands = dict(agent_settings.get("quick_commands") or {})
+
+    parser = argparse.ArgumentParser(
+        description="Run the S5 NVIDIA vision-language DACH robot task agent."
+    )
+    parser.add_argument(
+        "--config",
+        default=config_args.config,
+        help="Path to the S5 YAML configuration file",
+    )
+    parser.add_argument("--instruction", help="Natural-language robot task")
+    parser.add_argument("--rgb", help="Path to an RGB image")
+    parser.add_argument("--depth", help="Optional path to a depth visualization")
+    parser.add_argument(
+        "--camera-dir",
+        default=str(camera_settings.get("directory", "/tmp/eva-agent-s5-camera")),
+        help="Fixed directory published by the Isaac RGBD camera bridge",
+    )
+    parser.add_argument(
+        "--no-camera",
+        action="store_true",
+        default=not bool(camera_settings.get("enabled", True)),
+        help="Disable automatic use of the Isaac RGBD camera bridge",
+    )
+    parser.add_argument(
+        "--camera-max-age",
+        type=float,
+        default=float(camera_settings.get("max_frame_age_sec", 3.0)),
+        help="Maximum age in seconds for a live Isaac camera frame",
+    )
+    parser.add_argument(
+        "--camera-refresh-timeout",
+        type=float,
+        default=float(camera_settings.get("refresh_timeout_sec", 15.0)),
+        help="Seconds to wait for a fresh frame after restoring the camera bridge",
+    )
+    parser.add_argument(
+        "--chat",
+        action=argparse.BooleanOptionalAction,
+        default=bool(runtime_settings.get("chat", True)),
+        help="Start an interactive conversation and retain context",
+    )
+    parser.add_argument(
+        "--model",
+        default=base_config.model_name_or_path,
+        help="NVIDIA Build model name",
+    )
+    parser.add_argument(
+        "--nvidia-url",
+        default=base_config.base_url,
+        help="NVIDIA Build OpenAI-compatible API base URL",
+    )
+    parser.add_argument(
+        "--image-max-edge",
+        type=int,
+        default=base_config.image_max_edge,
+        help="Resize RGBD images to this maximum edge before upload",
+    )
+    parser.add_argument(
+        "--load-only",
+        action="store_true",
+        help="Load the model and exit without inference",
+    )
+    parser.add_argument(
+        "--execute",
+        action=argparse.BooleanOptionalAction,
+        default=bool(execution_settings.get("enabled", True)),
+        help="Send doable plans to the Isaac task bridge",
+    )
+    parser.add_argument(
+        "--task-dir",
+        default=str(execution_settings.get("task_directory", "/tmp/eva-agent-s5-control")),
+        help="Fixed JSON command directory shared with Isaac",
+    )
+    parser.add_argument(
+        "--execution-timeout",
+        type=float,
+        default=float(execution_settings.get("timeout_sec", 900)),
+        help="Seconds to wait for Isaac to finish a robot task",
+    )
+    parser.add_argument(
+        "--isaac-host",
+        default=str(isaac_settings.get("host", "127.0.0.1")),
+        help="Isaac Sim VSCode executor host",
+    )
+    parser.add_argument(
+        "--isaac-port",
+        type=int,
+        default=int(isaac_settings.get("port", 8226)),
+        help="Isaac Sim VSCode executor port",
+    )
+    parser.add_argument(
+        "--no-isaac-autostart",
+        action="store_true",
+        default=not bool(isaac_settings.get("autostart", True)),
+        help="Do not restore the Isaac S5 runtime when its heartbeat is stale",
+    )
+    args = parser.parse_args(raw_argv)
+
+    if not args.load_only and not args.chat and not args.instruction:
+        parser.print_help()
+        return 0
+
+    config = NvidiaConfig(
+        model_name_or_path=args.model,
+        base_url=args.nvidia_url,
+        api_key=base_config.api_key,
+        max_tokens=base_config.max_tokens,
+        temperature=base_config.temperature,
+        top_p=base_config.top_p,
+        frequency_penalty=base_config.frequency_penalty,
+        presence_penalty=base_config.presence_penalty,
+        request_timeout_sec=base_config.request_timeout_sec,
+        max_retries=base_config.max_retries,
+        retry_backoff_sec=base_config.retry_backoff_sec,
+        image_max_edge=args.image_max_edge,
+        max_history_messages=base_config.max_history_messages,
+    )
+    agent = NvidiaVLAgent(
+        config=config,
+        scene_name_resolver=SceneNameResolver.from_mapping(scene_settings),
+    )
+    if args.load_only:
+        try:
+            agent.load()
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        print(f"NVIDIA VLM ready: {config.model_name_or_path}")
+        return 0
+
+    task_client = (
+        FileTaskClient(
+            args.task_dir,
+            timeout_sec=args.execution_timeout,
+        )
+        if args.execute
+        else None
+    )
+    runtime_launcher = (
+        IsaacRuntimeLauncher(
+            task_client,
+            config=IsaacRuntimeConfig(
+                host=args.isaac_host,
+                port=args.isaac_port,
+            ),
+        )
+        if not args.no_isaac_autostart
+        else None
+    )
+
+    if args.chat:
+        try:
+            agent.load()
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        bridge_paths = camera_bridge_paths(args.camera_dir)
+        use_camera_bridge = not args.no_camera and args.rgb is None
+        rgb_image = str(bridge_paths.rgb) if use_camera_bridge else args.rgb
+        depth_image = (
+            str(bridge_paths.depth)
+            if use_camera_bridge and args.depth is None
+            else args.depth
+        )
+        return _run_chat_loop(
+            agent,
+            rgb_image,
+            depth_image,
+            camera_directory=args.camera_dir,
+            use_camera_bridge=use_camera_bridge,
+            task_client=task_client,
+            runtime_launcher=runtime_launcher,
+            camera_max_age_sec=args.camera_max_age,
+            camera_refresh_timeout_sec=args.camera_refresh_timeout,
+            quick_commands=quick_commands,
+        )
+
+    if not args.no_camera and args.rgb is None:
+        bridge_paths = camera_bridge_paths(args.camera_dir)
+        _ensure_live_camera_frame(
+            bridge_paths,
+            runtime_launcher,
+            max_age_sec=args.camera_max_age,
+            timeout_sec=args.camera_refresh_timeout,
+        )
+        args.rgb = str(bridge_paths.rgb)
+        if args.depth is None:
+            args.depth = str(bridge_paths.depth)
+
+    result_json = agent.infer(
+        instruction=args.instruction,
+        rgb_image=args.rgb,
+        depth_image=args.depth,
+    )
+    print(result_json)
+    if args.execute:
+        execution_json = _dispatch_plan_to_isaac(
+            agent,
+            result_json,
+            task_client,
+            runtime_launcher,
+        )
+        if execution_json is not None:
+            print(execution_json)
+    return 0
+
+
+def _run_chat_loop(
+    agent: NvidiaVLAgent,
+    rgb_image: str | None,
+    depth_image: str | None,
+    *,
+    camera_directory: str | Path,
+    use_camera_bridge: bool,
+    task_client: FileTaskClient | None,
+    runtime_launcher: IsaacRuntimeLauncher | None,
+    camera_max_age_sec: float,
+    camera_refresh_timeout_sec: float,
+    quick_commands: dict[str, str] | None = None,
+) -> int:
+    print(f"Connected to NVIDIA Build model: {agent.config.model_name_or_path}")
+    print(
+        "Commands: /camera, /isaac, /reload, /rgb PATH, /depth PATH, "
+        "/reset, /history, /quit"
+    )
+    if quick_commands:
+        hint = ", ".join(f"{k}={v}" for k, v in quick_commands.items())
+        print(f"Quick commands: {hint}")
+    print(f"Isaac execution: {'enabled' if task_client is not None else 'disabled'}")
+    current_rgb = rgb_image
+    current_depth = depth_image
+    bridge_paths = camera_bridge_paths(camera_directory)
+    if use_camera_bridge:
+        print(f"Isaac camera: {bridge_paths.directory}")
+    while True:
+        try:
+            message = input("you> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            agent.release_resources()
+            return 0
+        if not message:
+            continue
+        if message in {"/quit", "/exit"}:
+            agent.release_resources()
+            return 0
+        if quick_commands and message in quick_commands:
+            message = quick_commands[message]
+            print(f"you> {message}")
+        if message == "/reset":
+            agent.reset_conversation()
+            print("nvidia> conversation reset")
+            continue
+        if message == "/history":
+            print(f"nvidia> {agent.conversation_json()}")
+            continue
+        if message == "/camera":
+            current_rgb = str(bridge_paths.rgb)
+            current_depth = str(bridge_paths.depth)
+            use_camera_bridge = True
+            print(f"nvidia> Isaac camera set to {bridge_paths.directory}")
+            continue
+        if message == "/isaac":
+            if runtime_launcher is None:
+                print("executor> Isaac autostart is disabled")
+                continue
+            try:
+                started = runtime_launcher.ensure_ready()
+            except Exception as exc:
+                print(f"executor> ERROR: {exc}")
+                continue
+            state = "restored" if started else "already ready"
+            print(f"executor> Isaac runtime {state}")
+            continue
+        if message == "/reload":
+            if runtime_launcher is None:
+                print("executor> Isaac autostart is disabled")
+                continue
+            try:
+                runtime_launcher.reload()
+            except Exception as exc:
+                print(f"executor> ERROR: {exc}")
+                continue
+            print("executor> Isaac runtime reloaded from current S5 source")
+            continue
+        if message.startswith("/rgb "):
+            current_rgb = message[5:].strip()
+            use_camera_bridge = False
+            print(f"nvidia> RGB image set to {current_rgb}")
+            continue
+        if message.startswith("/depth "):
+            current_depth = message[7:].strip()
+            use_camera_bridge = False
+            print(f"nvidia> depth image set to {current_depth}")
+            continue
+        if use_camera_bridge:
+            try:
+                restored = _ensure_live_camera_frame(
+                    bridge_paths,
+                    runtime_launcher,
+                    max_age_sec=camera_max_age_sec,
+                    timeout_sec=camera_refresh_timeout_sec,
+                )
+            except Exception as exc:
+                print(f"nvidia> ERROR: {exc}")
+                continue
+            if restored:
+                print("nvidia> Isaac camera bridge restored with a fresh frame")
+        try:
+            print("nvidia> inferring...", flush=True)
+            response_json = agent.chat(message, current_rgb, current_depth)
+        except Exception as exc:
+            print(f"nvidia> ERROR: {exc}")
+            continue
+        print(f"nvidia> {response_json}")
+        if task_client is not None:
+            try:
+                execution_json = _dispatch_plan_to_isaac(
+                    agent,
+                    response_json,
+                    task_client,
+                    runtime_launcher,
+                )
+            except Exception as exc:
+                print(f"executor> ERROR: {exc}")
+                continue
+            if execution_json is not None:
+                print(f"executor> {execution_json}")
+
+
+def _is_text_only_chat_message(message: str) -> bool:
+    normalized = "".join(message.strip().lower().split()).strip("!?.,。！？")
+    text_only_messages = {
+        "hi",
+        "hello",
+        "你好",
+        "您好",
+        "嗨",
+        "早上好",
+        "下午好",
+        "晚上好",
+        "谢谢",
+        "感谢",
+        "你是谁",
+        "你能做什么",
+    }
+    return normalized in text_only_messages
+
+
+def _is_scene_inspection_message(message: str) -> bool:
+    normalized = "".join(message.strip().lower().split())
+    scene_markers = ("场景", "画面", "图片", "图像", "scene", "image", "visible")
+    inspect_markers = (
+        "有什么",
+        "有哪些",
+        "看见",
+        "看到",
+        "识别",
+        "读取",
+        "describe",
+        "what",
+        "list",
+    )
+    return any(marker in normalized for marker in scene_markers) and any(
+        marker in normalized for marker in inspect_markers
+    )
+
+
+def _normalize_scene_inventory(response: dict[str, Any]) -> dict[str, Any]:
+    scene_objects = next(
+        (
+            response.get(key)
+            for key in ("scene_objects", "visible_objects", "objects", "items")
+            if isinstance(response.get(key), list)
+        ),
+        None,
+    )
+    message = str(response.get("response") or response.get("reason") or "").strip()
+    normalized: dict[str, Any] = {
+        "schema_version": "1.0",
+        "doable": False,
+        "task": "conversation",
+    }
+    if isinstance(scene_objects, list):
+        normalized["scene_objects"] = scene_objects
+        if not message:
+            descriptions = []
+            for item in scene_objects:
+                if not isinstance(item, Mapping):
+                    continue
+                name = str(item.get("object") or item.get("name") or "物体").strip()
+                details = [
+                    str(item.get(field) or "").strip()
+                    for field in ("color", "position")
+                ]
+                details = [detail for detail in details if detail]
+                descriptions.append(
+                    f"{name}（{'，'.join(details)}）" if details else name
+                )
+            if descriptions:
+                message = "当前场景可见：" + "；".join(descriptions) + "。"
+    normalized["response"] = message or "当前画面中没有识别到清晰可见的物体。"
+    return normalized
+
+
+def _normalize_scene_task_names(
+    response: dict[str, Any],
+    resolver: SceneNameResolver,
+) -> dict[str, Any]:
+    # 将 VLM 返回的 action_sequence 格式转成 actions 格式，剥离 grasp_pose/pose
+    action_sequence = response.get("action_sequence")
+    if isinstance(action_sequence, list) and response.get("doable") is True:
+        pick_obj = None
+        place_target = None
+        for step in action_sequence:
+            if not isinstance(step, dict):
+                continue
+            act_name = str(step.get("action", "")).strip().lower()
+            if act_name == "pick" and pick_obj is None:
+                pick_obj = str(step.get("object") or "").strip()
+            elif act_name == "place" and place_target is None:
+                place_target = str(step.get("container") or step.get("target") or "").strip()
+        if not place_target:
+            place_target = str(response.get("target_container") or response.get("target_name") or "").strip()
+        if pick_obj:
+            response["actions"] = [{
+                "action_id": "action-1",
+                "task": "pick_and_place",
+                "object_name": pick_obj,
+                "target_name": place_target or pick_obj,
+            }]
+            response.pop("action_sequence", None)
+    
+    # 即使是 doable=false，也要规范化 reason 中提到的物体名
+    if response.get("doable") is not True:
+        reason = response.get("reason")
+        if isinstance(reason, str) and reason.strip():
+            for name_from, name_to in resolver._aliases.items():
+                if len(name_from) >= 3 and name_from in reason.lower().replace(" ", ""):
+                    # Check if canonicalizing a visible object would change doable
+                    pass
+        return response
+    for field in ("target_object", "object_name", "target_container", "target_name"):
+        if field in response:
+            response[field] = resolver.canonicalize(response[field])
+    target_objects = response.get("target_objects")
+    if isinstance(target_objects, list):
+        response["target_objects"] = [
+            resolver.canonicalize(item) if not isinstance(item, Mapping) else item
+            for item in target_objects
+        ]
+    actions = response.get("actions")
+    if isinstance(actions, list):
+        for action in actions:
+            if not isinstance(action, dict):
+                continue
+            for field in ("object_name", "target_object", "target_name", "target_container"):
+                if field in action:
+                    action[field] = resolver.canonicalize(action[field])
+    return response
+
+
+def _normalize_directional_targets(
+    response: dict[str, Any],
+    instruction: str,
+) -> dict[str, Any]:
+    if response.get("doable") is not True:
+        return response
+
+    instruction_target = _directional_destination_from_instruction(instruction)
+    response_target = _canonical_direction(response.get("target_container"))
+    directional_target = instruction_target or response_target
+    if directional_target is not None:
+        response["target_container"] = directional_target
+
+    actions = response.get("actions")
+    if isinstance(actions, list):
+        for action in actions:
+            if not isinstance(action, dict):
+                continue
+            action_target = (
+                instruction_target
+                or _canonical_direction(action.get("target_name"))
+                or directional_target
+            )
+            if action_target is None:
+                continue
+            action["target_name"] = action_target
+            attributes = action.get("attributes")
+            if not isinstance(attributes, dict):
+                attributes = {}
+                action["attributes"] = attributes
+            attributes["target_region"] = action_target
+    return response
+
+
+def _canonical_direction(value: Any) -> str | None:
+    normalized = "".join(str(value or "").strip().lower().split())
+    left = any(
+        marker in normalized
+        for marker in ("left_zone", "leftarea", "leftside", "左边", "左侧")
+    )
+    right = any(
+        marker in normalized
+        for marker in ("right_zone", "rightarea", "rightside", "右边", "右侧")
+    )
+    if left == right:
+        return None
+    return "left_zone" if left else "right_zone"
+
+
+def _directional_destination_from_instruction(instruction: str) -> str | None:
+    candidates: list[tuple[int, str]] = []
+    chinese_patterns = (
+        r"(?:拿|放|移动|移|搬|送|摆|抓)(?:到|至|往)?(?:最)?(左边|左侧|右边|右侧)",
+        r"(?:到|至|往)(?:最)?(左边|左侧|右边|右侧)",
+    )
+    for pattern in chinese_patterns:
+        for match in re.finditer(pattern, instruction):
+            target = _canonical_direction(match.group(1))
+            if target is not None:
+                candidates.append((match.start(), target))
+
+    english_pattern = re.compile(
+        r"\b(?:to|toward|towards)\s+(?:the\s+)?(left|right)(?:\s+side)?\b",
+        re.IGNORECASE,
+    )
+    for match in english_pattern.finditer(instruction):
+        target = _canonical_direction(match.group(1) + " side")
+        if target is not None:
+            candidates.append((match.start(), target))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item[0])[1]
+
+
+def _dispatch_plan_to_isaac(
+    agent: NvidiaVLAgent,
+    response_json: str,
+    task_client: FileTaskClient,
+    runtime_launcher: IsaacRuntimeLauncher | None = None,
+) -> str | None:
+    plan_json = TaskPlanner().plan(response_json)
+    plan = loads_json(plan_json)
+    if not plan.get("doable", False):
+        return None
+    print("executor> releasing VLM resources before GraspNet...", flush=True)
+    agent.release_resources()
+    if runtime_launcher is not None:
+        print("executor> checking Isaac runtime...", flush=True)
+        if runtime_launcher.ensure_ready():
+            print("executor> Isaac runtime restored", flush=True)
+    print("executor> waiting for Isaac...", flush=True)
+    return task_client.execute(plan_json)
+
+
+def _camera_frame_age_sec(bridge_paths: Any, *, now: float | None = None) -> float:
+    if not (
+        bridge_paths.rgb.is_file()
+        and bridge_paths.depth.is_file()
+        and bridge_paths.metadata.is_file()
+    ):
+        return float("inf")
+    try:
+        metadata = json.loads(bridge_paths.metadata.read_text(encoding="utf-8"))
+        captured_at = float(metadata.get("captured_at_unix") or 0.0)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return float("inf")
+    if captured_at <= 0:
+        return float("inf")
+    return max(0.0, (time.time() if now is None else now) - captured_at)
+
+
+def _camera_frame_is_fresh(bridge_paths: Any, max_age_sec: float) -> bool:
+    return _camera_frame_age_sec(bridge_paths) <= max_age_sec
+
+
+def _ensure_live_camera_frame(
+    bridge_paths: Any,
+    runtime_launcher: IsaacRuntimeLauncher | None,
+    *,
+    max_age_sec: float,
+    timeout_sec: float,
+) -> bool:
+    if _camera_frame_is_fresh(bridge_paths, max_age_sec):
+        return False
+    age = _camera_frame_age_sec(bridge_paths)
+    age_text = "missing" if age == float("inf") else f"{age:.1f}s old"
+    if runtime_launcher is None:
+        raise RuntimeError(
+            f"Isaac camera frame is stale ({age_text}) and camera autostart is disabled"
+        )
+    runtime_launcher.restore_camera()
+    _wait_for_camera_images(
+        bridge_paths,
+        timeout_sec=timeout_sec,
+        max_age_sec=max_age_sec,
+    )
+    return True
+
+
+def _wait_for_camera_images(
+    bridge_paths: Any,
+    timeout_sec: float = 10.0,
+    max_age_sec: float = 3.0,
+) -> None:
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        if _camera_frame_is_fresh(bridge_paths, max_age_sec):
+            return
+        time.sleep(0.1)
+    age = _camera_frame_age_sec(bridge_paths)
+    age_text = "missing" if age == float("inf") else f"{age:.1f}s old"
+    raise RuntimeError(
+        f"Isaac camera bridge did not publish a fresh RGBD frame within "
+        f"{timeout_sec:.1f}s (latest frame: {age_text})"
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,9 @@
+# Request
+TaskRequest request
+string replan_context_json
+
+---
+# Response
+bool success
+TaskPlan plan
+string error_message

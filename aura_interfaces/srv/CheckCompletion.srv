@@ -1,0 +1,12 @@
+# Request
+TaskRequest request
+TaskPlan plan
+string execution_result_json
+
+---
+# Response
+bool success
+bool need_replan
+float32 confidence
+string reason
+string[] failed_actions

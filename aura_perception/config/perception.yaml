@@ -1,0 +1,23 @@
+# VLM Configuration
+nvidia:
+  model: "nvidia/nemotron-nano-12b-v2-vl"
+  base_url: "https://integrate.api.nvidia.com/v1"
+  api_key: ""  # Set via NVIDIA_API_KEY environment variable
+  max_tokens: 4096
+  temperature: 0.2
+  top_p: 0.9
+  request_timeout_sec: 300.0
+  max_retries: 3
+
+# Agent Configuration
+agent:
+  image_max_edge: 640
+  max_history_messages: 6
+
+# Scene Configuration
+scene:
+  canonical_names:
+    basket: ["篮子", "筐", "purple_box"]
+    banana: ["香蕉", "黄色香蕉"]
+    cup: ["杯子", "茶杯"]
+    can: ["罐头", "罐子"]
