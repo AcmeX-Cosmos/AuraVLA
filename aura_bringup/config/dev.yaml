@@ -1,0 +1,19 @@
+# Development Environment Configuration
+
+# Extends base system configuration
+extends: system.yaml
+
+# Development overrides
+system:
+  description: "AuraVLA Development Environment"
+
+logging:
+  level: "DEBUG"
+
+perception:
+  vlm:
+    temperature: 0.0  # Deterministic for testing
+
+execution:
+  bridge:
+    timeout_sec: 60.0  # Shorter timeout for dev

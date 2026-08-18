@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>aura_bringup</name>
+  <version>1.0.0</version>
+  <description>AuraVLA system launch and configuration</description>
+  <maintainer email="eva@example.com">AuraVLA Team</maintainer>
+  <license>Apache-2.0</license>
+
+  <exec_depend>aura_interfaces</exec_depend>
+  <exec_depend>aura_perception</exec_depend>
+  <exec_depend>aura_planning</exec_depend>
+  <exec_depend>aura_execution</exec_depend>
+  <exec_depend>aura_verification</exec_depend>
+  <exec_depend>aura_orchestration</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

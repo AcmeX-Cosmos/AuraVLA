@@ -1,0 +1,41 @@
+# AuraVLA System Configuration
+
+system:
+  name: "AuraVLA"
+  version: "1.0.0"
+  description: "Embodied Vision Agent"
+
+# Orchestration
+orchestration:
+  max_replans: 2
+  timeout_sec: 600.0
+
+# Perception
+perception:
+  vlm:
+    model: "nvidia/nemotron-nano-12b-v2-vl"
+    base_url: "https://integrate.api.nvidia.com/v1"
+    api_key: "${NVIDIA_API_KEY}"
+    max_tokens: 4096
+    temperature: 0.2
+    request_timeout_sec: 300.0
+
+  image:
+    max_edge: 640
+
+# Planning
+planning:
+  max_actions: 10
+  schema_version: "1.0"
+
+# Execution
+execution:
+  bridge:
+    directory: "/tmp/eva-agent-control"
+    timeout_sec: 300.0
+    check_interval_sec: 0.5
+
+# Logging
+logging:
+  level: "INFO"
+  format: "[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s"

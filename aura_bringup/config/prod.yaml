@@ -1,0 +1,19 @@
+# Production Environment Configuration
+
+# Extends base system configuration
+extends: system.yaml
+
+# Production overrides
+system:
+  description: "AuraVLA Production Environment"
+
+logging:
+  level: "INFO"
+
+perception:
+  vlm:
+    max_retries: 5
+
+execution:
+  bridge:
+    timeout_sec: 600.0

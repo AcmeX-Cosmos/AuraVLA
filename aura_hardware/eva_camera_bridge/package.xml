@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>aura_camera_bridge</name>
+  <version>1.0.0</version>
+  <description>AuraVLA camera bridge for Isaac Sim</description>
+  <maintainer email="eva@example.com">AuraVLA Team</maintainer>
+  <license>Apache-2.0</license>
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>cv_bridge</depend>
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
