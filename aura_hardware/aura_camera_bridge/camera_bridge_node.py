@@ -24,7 +24,7 @@ class CameraBridgeNode(Node):
     def __init__(self):
         super().__init__('aura_camera_bridge_node')
 
-        self.declare_parameter('camera_directory', '/tmp/eva-agent-camera')
+        self.declare_parameter('camera_directory', '/tmp/aura-vla-camera')
         self.declare_parameter('publish_rate', 10.0)
 
         camera_dir = self.get_parameter('camera_directory').value

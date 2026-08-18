@@ -18,10 +18,10 @@ from urllib.request import Request, urlopen
 
 # AuraVLA ROS2 structure imports
 _aura_root = Path(__file__).resolve().parent.parent.parent.parent.parent
-_camera_bridge_path = _aura_root / "aura_hardware" / "eva_camera_bridge"
-_isaac_bridge_path = _aura_root / "aura_hardware" / "eva_isaac_bridge"
-_execution_path = _aura_root / "aura_execution" / "aura_execution" / "eva_execution"
-_planning_path = _aura_root / "aura_planning" / "aura_planning" / "eva_planning"
+_camera_bridge_path = _aura_root / "aura_hardware" / "aura_camera_bridge"
+_isaac_bridge_path = _aura_root / "aura_hardware" / "aura_isaac_bridge"
+_execution_path = _aura_root / "aura_execution" / "aura_execution" / "aura_execution"
+_planning_path = _aura_root / "aura_planning" / "aura_planning" / "aura_planning"
 
 # Add all required paths to sys.path
 for _p in [_camera_bridge_path, _isaac_bridge_path, _execution_path, _planning_path]:
@@ -617,7 +617,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--depth", help="Optional path to a depth visualization")
     parser.add_argument(
         "--camera-dir",
-        default=str(camera_settings.get("directory", "/tmp/eva-agent-s5-camera")),
+        default=str(camera_settings.get("directory", "/tmp/aura-vla-camera")),
         help="Fixed directory published by the Isaac RGBD camera bridge",
     )
     parser.add_argument(
@@ -673,7 +673,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--task-dir",
-        default=str(execution_settings.get("task_directory", "/tmp/eva-agent-s5-control")),
+        default=str(execution_settings.get("task_directory", "/tmp/aura-vla-control")),
         help="Fixed JSON command directory shared with Isaac",
     )
     parser.add_argument(

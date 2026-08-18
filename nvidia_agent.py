@@ -32,10 +32,10 @@ _AURA_ROOT = Path(__file__).resolve().parent
 _paths_to_add = [
     _AURA_ROOT,
     _AURA_ROOT / "aura_perception" / "aura_perception",
-    _AURA_ROOT / "aura_hardware" / "eva_camera_bridge",
-    _AURA_ROOT / "aura_hardware" / "eva_isaac_bridge",
-    _AURA_ROOT / "aura_execution" / "aura_execution" / "eva_execution",
-    _AURA_ROOT / "aura_planning" / "aura_planning" / "eva_planning",
+    _AURA_ROOT / "aura_hardware" / "aura_camera_bridge",
+    _AURA_ROOT / "aura_hardware" / "aura_isaac_bridge",
+    _AURA_ROOT / "aura_execution" / "aura_execution" / "aura_execution",
+    _AURA_ROOT / "aura_planning" / "aura_planning" / "aura_planning",
 ]
 
 for _p in _paths_to_add:
@@ -44,14 +44,14 @@ for _p in _paths_to_add:
 
 # 导入并运行主Agent
 try:
-    from eva_perception.nvidia_agent import main
+    from aura_perception.nvidia_agent import main
 
     if __name__ == "__main__":
         main()
 except ImportError as e:
     print(f"错误: 无法导入nvidia_agent模块")
     print(f"详细信息: {e}")
-    print(f"\n请确保已创建 aura_perception/aura_perception/eva_perception/nvidia_agent.py 文件")
+    print(f"\n请确保已创建 aura_perception/aura_perception/aura_perception/nvidia_agent.py 文件")
     print(f"项目根目录: {_AURA_ROOT}")
     import traceback
     traceback.print_exc()

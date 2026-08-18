@@ -40,7 +40,7 @@ class PlanningNode(Node):
         # Create service
         self.planning_service = self.create_service(
             GeneratePlan,
-            'eva/planning/generate_plan',
+            'aura/planning/generate_plan',
             self.generate_plan_callback
         )
 

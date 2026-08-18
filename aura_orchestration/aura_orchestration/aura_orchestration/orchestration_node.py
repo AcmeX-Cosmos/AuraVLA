@@ -32,22 +32,22 @@ class OrchestrationNode(Node):
         # Create service clients
         self.doable_client = self.create_client(
             EvaluateDoable,
-            'eva/perception/doable'
+            'aura/perception/doable'
         )
         self.planning_client = self.create_client(
             GeneratePlan,
-            'eva/planning/generate_plan'
+            'aura/planning/generate_plan'
         )
         self.check_client = self.create_client(
             CheckCompletion,
-            'eva/verification/check_completion'
+            'aura/verification/check_completion'
         )
 
         # Create action client
         self.execution_client = ActionClient(
             self,
             ExecuteTask,
-            'eva/execution/execute_task'
+            'aura/execution/execute_task'
         )
 
         self.get_logger().info('AuraVLA Orchestration Node initialized')

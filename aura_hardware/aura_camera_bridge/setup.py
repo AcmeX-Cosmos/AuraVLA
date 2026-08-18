@@ -8,7 +8,7 @@ setup(
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='AuraVLA Team',
-    maintainer_email='eva@example.com',
+    maintainer_email='AcmeX@foxmail.com',
     description='AuraVLA camera bridge',
     license='Apache-2.0',
     entry_points={

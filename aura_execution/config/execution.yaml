@@ -2,7 +2,7 @@
 execution:
   # Task bridge settings
   bridge:
-    directory: "/tmp/eva-agent-control"
+    directory: "/tmp/aura-vla-control"
     request_file: "request.json"
     response_file: "response.json"
     status_file: "status.json"

@@ -37,7 +37,7 @@ class ExecutionNode(Node):
         # Initialize task bridge
         bridge_cfg = config.get('execution', {}).get('bridge', {})
         bridge_config = BridgeConfig(
-            directory=bridge_cfg.get('directory', '/tmp/eva-agent-control'),
+            directory=bridge_cfg.get('directory', '/tmp/aura-vla-control'),
             timeout_sec=float(bridge_cfg.get('timeout_sec', 300.0)),
             check_interval_sec=float(bridge_cfg.get('check_interval_sec', 0.5))
         )
@@ -49,7 +49,7 @@ class ExecutionNode(Node):
         self._action_server = ActionServer(
             self,
             ExecuteTask,
-            'eva/execution/execute_task',
+            'aura/execution/execute_task',
             execute_callback=self.execute_callback,
             goal_callback=self.goal_callback,
             cancel_callback=self.cancel_callback
@@ -154,7 +154,7 @@ class ExecutionNode(Node):
         return {
             'execution': {
                 'bridge': {
-                    'directory': '/tmp/eva-agent-control',
+                    'directory': '/tmp/aura-vla-control',
                     'timeout_sec': 300.0,
                     'check_interval_sec': 0.5
                 }

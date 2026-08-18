@@ -35,7 +35,7 @@ camera_prim_path = str(
 os.environ["AURA_CAMERA_PRIM_PATH"] = camera_prim_path
 
 # Import camera bridge from hardware package
-sys.path.insert(0, str(aura_directory / "aura_hardware" / "eva_camera_bridge"))
+sys.path.insert(0, str(aura_directory / "aura_hardware" / "aura_camera_bridge"))
 from camera_bridge import start_camera_bridge
 
 

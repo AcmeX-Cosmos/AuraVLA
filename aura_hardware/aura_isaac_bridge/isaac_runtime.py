@@ -10,7 +10,7 @@ import time
 
 # Add execution path for FileTaskClient import
 _aura_root = Path(__file__).resolve().parent.parent.parent
-_execution_path = _aura_root / "aura_execution" / "aura_execution" / "eva_execution"
+_execution_path = _aura_root / "aura_execution" / "aura_execution" / "aura_execution"
 if str(_execution_path) not in sys.path:
     sys.path.insert(0, str(_execution_path))
 

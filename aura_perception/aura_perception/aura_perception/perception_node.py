@@ -63,7 +63,7 @@ class PerceptionNode(Node):
         # Create service
         self.doable_service = self.create_service(
             EvaluateDoable,
-            'eva/perception/doable',
+            'aura/perception/doable',
             self.evaluate_doable_callback
         )
 

@@ -21,7 +21,7 @@ class IsaacBridgeNode(Node):
     def __init__(self):
         super().__init__('aura_isaac_bridge_node')
 
-        self.declare_parameter('status_file', '/tmp/eva-agent-control/status.json')
+        self.declare_parameter('status_file', '/tmp/aura-vla-control/status.json')
         self.declare_parameter('check_rate', 1.0)
 
         status_file = self.get_parameter('status_file').value

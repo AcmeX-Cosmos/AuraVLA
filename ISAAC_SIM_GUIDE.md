@@ -66,11 +66,11 @@ AuraVLA/
 │   └── config/
 │       └── config.yaml             # 系统配置文件
 ├── aura_hardware/
-│   └── eva_camera_bridge/
+│   └── aura_camera_bridge/
 │       └── camera_bridge.py        # 相机桥接实现
 ├── aura_perception/
 │   └── aura_perception/
-│       └── eva_perception/
+│       └── aura_perception/
 │           └── nvidia_agent.py     # VLM 对话系统
 └── .vscode/
     ├── settings.json               # VS Code 配置

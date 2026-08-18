@@ -3,7 +3,7 @@
   <name>aura_verification</name>
   <version>1.0.0</version>
   <description>AuraVLA verification module</description>
-  <maintainer email="eva@example.com">AuraVLA Team</maintainer>
+  <maintainer email="AcmeX@foxmail.com">AuraVLA Team</maintainer>
   <license>Apache-2.0</license>
   <depend>rclpy</depend>
   <depend>aura_interfaces</depend>

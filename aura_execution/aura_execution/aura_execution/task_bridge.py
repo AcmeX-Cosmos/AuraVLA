@@ -12,8 +12,8 @@ import uuid
 
 # Add paths for local imports
 _aura_root = Path(__file__).resolve().parent.parent.parent.parent
-_orchestration_path = _aura_root / "aura_orchestration" / "aura_orchestration" / "eva_orchestration"
-_planning_path = _aura_root / "aura_planning" / "aura_planning" / "eva_planning"
+_orchestration_path = _aura_root / "aura_orchestration" / "aura_orchestration" / "aura_orchestration"
+_planning_path = _aura_root / "aura_planning" / "aura_planning" / "aura_planning"
 
 for _p in [_orchestration_path, _planning_path]:
     if str(_p) not in sys.path:
@@ -24,7 +24,7 @@ from schemas import dumps_json, loads_json
 
 
 DEFAULT_TASK_BRIDGE_DIR = Path(
-    os.getenv("EVA_AGENT_TASK_DIR", "/tmp/eva-agent-s5-control")
+    os.getenv("AURA_VLA_TASK_DIR", "/tmp/aura-vla-control")
 ).expanduser()
 
 

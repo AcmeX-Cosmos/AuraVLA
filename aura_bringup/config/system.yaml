@@ -31,7 +31,7 @@ planning:
 # Execution
 execution:
   bridge:
-    directory: "/tmp/eva-agent-control"
+    directory: "/tmp/aura-vla-control"
     timeout_sec: 300.0
     check_interval_sec: 0.5
 

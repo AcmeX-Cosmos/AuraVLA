@@ -23,7 +23,7 @@ class VerificationNode(Node):
 
         self.check_service = self.create_service(
             CheckCompletion,
-            'eva/verification/check_completion',
+            'aura/verification/check_completion',
             self.check_callback
         )
 

@@ -17,7 +17,7 @@ setup(
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='AuraVLA Team',
-    maintainer_email='eva@example.com',
+    maintainer_email='AcmeX@foxmail.com',
     description='AuraVLA perception module for scene understanding',
     license='Apache-2.0',
     tests_require=['pytest'],
