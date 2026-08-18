@@ -1,0 +1,20 @@
+# Build artifacts
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+
+# IDE
+.idea/
+
+# OS
+.DS_Store
+
+# Temp
+*.tmp
+*.log

@@ -1,0 +1,141 @@
+nvidia:
+  api_key: "Bearer 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"
+  model: "nvidia/nemotron-nano-12b-v2-vl"
+  base_url: "https://integrate.api.nvidia.com/v1"
+  request_timeout_sec: 300
+  max_retries: 3
+  retry_backoff_sec: 1
+  max_tokens: 4096
+  temperature: 0.2
+  top_p: 0.9
+  frequency_penalty: 0.0
+  presence_penalty: 0.0
+
+agent:
+  image_max_edge: 640
+  max_history_messages: 6
+  quick_commands:
+    "1": "把香蕉放进篮子里"
+    "2": "把杯子放进篮子里"
+    "3": "把蓝色罐头放进篮子里"
+    "4": "把红白罐头放进篮子里"
+    "5": "/reload"
+    "6": "/camera"
+    "7": "现在画面中有什么物体"
+
+runtime:
+  chat: true
+
+visualization:
+  path:
+    enabled: true
+    refresh_interval_sec: 0.5
+    root_prim_path: "/World/AuraDebug/PlannedPath"
+
+camera:
+  enabled: true
+  prim_path: "/World/DACH_TRON2A/head_pitch_Link/camera"
+  directory: "/tmp/aura-vla-camera"
+  max_frame_age_sec: 3
+  refresh_timeout_sec: 15
+
+perception:
+  graspnet_calibration:
+    enabled: true
+    camera_offset_m: [0.000094005, 0.021269485, 0.018609223]
+    max_correction_m: 0.06
+
+execution:
+  enabled: true
+  task_directory: "/tmp/aura-vla-control"
+  timeout_sec: 900
+
+isaac:
+  host: "127.0.0.1"
+  port: 8226
+  autostart: true
+
+robot:
+  arm_side: "left"
+  base_xy: [0.3, -1.0]
+  grasp_height_offset: 0.015
+  grasp_yaw_offset_deg: 0.0
+  grasp_min_height_fraction: 0.20
+  banana_grasp_tilt_deg: 7.0
+  banana_near_side_offset_m: 0.0
+  banana_min_short_axis_alignment: 0.85
+  min_gripper_table_clearance_m: 0.0
+  table_clearance_abort_margin_m: 0.0
+  basket_place_table_clearance_m: 0.003
+  grasp_clearance_guard_pad_m: 0.0005
+  max_grasp_approach_tilt_deg: 15.0
+  target_grasp_approach_tilt_deg: 10.0
+  banana_use_simulated_attachment: true
+  use_graspnet: true
+  use_graspnet_orientation: true
+  gripper_close_frames: 120
+  gripper_max_effort_n: 16.0
+  gripper_stiffness: 500.0
+  gripper_damping: 15.0
+  gripper_contact_residual_m: 0.0015
+  gripper_contact_force_threshold_n: 2.0
+  gripper_contact_preload_residual_m: 0.0015
+  gripper_contact_hold_preload_m: 0.020
+  banana_static_friction: 10.0
+  banana_dynamic_friction: 8.0
+  gripper_static_friction: 10.0
+  gripper_dynamic_friction: 8.0
+  gripper_contact_settle_frames: 60
+  gripper_preload_confirm_frames: 3
+  banana_gripper_close_position: 0.0
+  banana_planar_refinement_steps: 3
+  banana_planar_center_tolerance_m: 0.008
+  banana_max_planar_correction_m: 0.05
+  physx_contact_offset_m: 0.02
+  physx_rest_offset_m: 0.001
+  physx_solver_position_iterations: 32
+  physx_solver_velocity_iterations: 8
+  physx_max_depenetration_velocity: 0.2
+  physx_enable_ccd: false
+  physx_convex_hull_vertex_limit: 64
+  physx_convex_max_hulls: 16
+  physx_convex_min_thickness_m: 0.001
+  physx_convex_shrink_wrap: true
+  physx_convex_error_percentage: 0.1
+  path_clearance_m: 0.10
+  basket_planning_margin_m: 0.03
+  trajectory_max_joint_step_rad: 0.049
+  trajectory_min_frames: 5
+  trajectory_settle_frames: 3
+  grasp_approach_max_joint_step_rad: 0.009
+  grasp_approach_min_frames: 30
+  action_waypoint_limit: 3
+  cartesian_waypoint_spacing_m: 0.04
+  transport_lift_height_m: 0.16
+  carry_cartesian_waypoint_spacing_m: 0.12
+  grasp_refinement_steps: 1
+  carry_apex_clearance_m: 0.15
+  dual_arm_min_tcp_separation_m: 0.14
+
+scene:
+  objects:
+    banana:
+      prim_path: "/World/banana"
+      aliases: ["香蕉", "黄色香蕉"]
+    basket:
+      prim_path: "/World/small_KLT_visual"
+      aliases: ["篮子", "盒子", "箱子", "收纳箱", "紫色盒子", "紫色箱子"]
+      reset_position: [0.2286785, -0.561705, -0.057662]
+      reset_orientation: [0.70710678, 0.0, 0.0, 0.70710678]
+    scissors:
+      prim_path: "/World/_37_scissors"
+      aliases: ["剪刀", "scissor"]
+    master_chef_can:
+      prim_path: "/World/_02_master_chef_can"
+      aliases: ["MasterChef", "MasterChef can", "MasterChef罐头", "MasterChef 罐头", "blue can", "蓝色罐头"]
+    tomato_soup_can:
+      prim_path: "/World/_05_tomato_soup_can"
+      aliases: ["tomato soup can", "red can", "番茄汤罐", "红色罐头", "红白罐头"]
+    mug:
+      prim_path: "/World/SM_Mug_A2"
+      aliases: ["杯子", "马克杯", "绿色杯子", "green mug"]

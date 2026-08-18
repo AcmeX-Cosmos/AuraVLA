@@ -1,0 +1,62 @@
+{
+  "folders": [
+    {
+      "name": "AuraVLA",
+      "path": "."
+    }
+  ],
+  "settings": {
+    "python.defaultInterpreterPath": "${env:HOME}/.local/share/ov/pkg/isaac-sim-4.2.0/python.sh",
+    "python.terminal.activateEnvironment": false,
+    "python.analysis.extraPaths": [
+      "${workspaceFolder}",
+      "${workspaceFolder}/aura_perception/aura_perception",
+      "${workspaceFolder}/aura_hardware/eva_camera_bridge",
+      "${workspaceFolder}/aura_hardware/eva_isaac_bridge",
+      "${workspaceFolder}/aura_execution/aura_execution/eva_execution",
+      "${workspaceFolder}/aura_planning/aura_planning/eva_planning"
+    ],
+    "files.exclude": {
+      "**/__pycache__": true,
+      "**/*.pyc": true,
+      "**/.pytest_cache": true
+    },
+    "terminal.integrated.env.linux": {
+      "AURA_VLA_ROOT": "${workspaceFolder}",
+      "PYTHONPATH": "${workspaceFolder}:${env:PYTHONPATH}"
+    }
+  },
+  "extensions": {
+    "recommendations": [
+      "ms-python.python",
+      "ms-python.vscode-pylance"
+    ]
+  },
+  "launch": {
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "Isaac Sim: Run main.py",
+        "type": "python",
+        "request": "launch",
+        "program": "${workspaceFolder}/main.py",
+        "console": "integratedTerminal",
+        "justMyCode": false,
+        "env": {
+          "AURA_VLA_ROOT": "${workspaceFolder}"
+        }
+      },
+      {
+        "name": "Python: nvidia_agent.py",
+        "type": "python",
+        "request": "launch",
+        "program": "${workspaceFolder}/nvidia_agent.py",
+        "console": "integratedTerminal",
+        "justMyCode": false,
+        "env": {
+          "AURA_VLA_ROOT": "${workspaceFolder}"
+        }
+      }
+    ]
+  }
+}
