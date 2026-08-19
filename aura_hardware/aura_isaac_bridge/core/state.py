@@ -22,14 +22,18 @@ DEFAULT_ISAAC_SITE_PACKAGES = (
 ISAAC_SITE_PACKAGES = Path(
     os.environ.get("ISAAC_PYTHON_SITE_PACKAGES", DEFAULT_ISAAC_SITE_PACKAGES)
 ).expanduser().resolve()
-STUDY_DIR = PROJECT_ROOT / "src" / "Study"
+STUDY_DIR = PROJECT_ROOT / "Study"
+if not (STUDY_DIR / "S5").is_dir():
+    STUDY_DIR = PROJECT_ROOT / "src" / "Study"
 S5_DIR = STUDY_DIR / "S5"
 SECTION3_DIR = STUDY_DIR / "section3"
 
-TRON2_URDF_PATH = (
-    PROJECT_ROOT / "troncamp-mani-main" / "embodiments"
-    / "tron2_v5_DACH_validing" / "robot.urdf"
+_DEFAULT_TRON2_URDF_CANDIDATES = (
+    Path(__file__).resolve().parents[2] / "aura_description" / "urdf" / "tron2_v5_DACH_validing" / "robot.urdf",
+    Path("/home/acmex/Code/learning/TRONCamp/troncamp-mani/embodiments/tron2_v5_DACH_validating/robot.urdf"),
+    PROJECT_ROOT / "troncamp-mani-main" / "embodiments" / "tron2_v5_DACH_validating" / "robot.urdf",
 )
+TRON2_URDF_PATH = Path(os.environ.get("S5_TRON2_URDF_PATH", next((str(path) for path in _DEFAULT_TRON2_URDF_CANDIDATES if path.is_file()), str(_DEFAULT_TRON2_URDF_CANDIDATES[-1])))).expanduser().resolve()
 DACH_ROBOT_DESCRIPTION_PATH = S5_DIR / "config" / "dach_tron2a_robot_description.yaml"
 DACH_RIGHT_ROBOT_DESCRIPTION_PATH = S5_DIR / "config" / "dach_tron2a_right_robot_description.yaml"
 DACH_LEFT_RRT_CONFIG_PATH = S5_DIR / "config" / "dach_tron2a_left_rrt.yaml"

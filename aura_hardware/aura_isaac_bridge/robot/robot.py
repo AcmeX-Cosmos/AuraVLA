@@ -28,8 +28,13 @@ from isaacsim.core.utils.types import ArticulationAction
 _BOOTSTRAP_PROJECT_ROOT = Path(
     os.environ.get("EVA_AGENT_ROOT", "/home/acmex/Code/learning/courses/Eva-Agent")
 ).expanduser().resolve()
-_BOOTSTRAP_STUDY_DIR = _BOOTSTRAP_PROJECT_ROOT / "src" / "Study"
+_BOOTSTRAP_STUDY_DIR = _BOOTSTRAP_PROJECT_ROOT / "Study"
+if not (_BOOTSTRAP_STUDY_DIR / "S5").is_dir():
+    _BOOTSTRAP_STUDY_DIR = _BOOTSTRAP_PROJECT_ROOT / "src" / "Study"
 _BOOTSTRAP_S5_DIR = _BOOTSTRAP_STUDY_DIR / "S5"
+_AURA_ISAAC_BRIDGE_DIR = Path(
+    os.environ.get("AURA_ISAAC_BRIDGE_ROOT", Path(__file__).resolve().parents[1])
+).expanduser().resolve()
 if str(_BOOTSTRAP_STUDY_DIR) not in sys.path:
     sys.path.insert(0, str(_BOOTSTRAP_STUDY_DIR))
 _s5_package = sys.modules.get("S5")
@@ -38,7 +43,10 @@ if _s5_package is None:
     _s5_package.__file__ = str(_BOOTSTRAP_S5_DIR / "__init__.py")
     _s5_package.__package__ = "S5"
     sys.modules["S5"] = _s5_package
-_s5_package.__path__ = [str(_BOOTSTRAP_S5_DIR)]
+_s5_package.__path__ = [
+    str(_AURA_ISAAC_BRIDGE_DIR),
+    str(_BOOTSTRAP_S5_DIR),
+]
 
 from S5.robot.dach_tron2a import (
     DACHTron2AArm,
@@ -94,6 +102,12 @@ from S5.core.state import (
     PHYSX_SOLVER_POSITION_ITERATIONS, PHYSX_SOLVER_VELOCITY_ITERATIONS,
     PHYSX_MAX_DEPENETRATION_VELOCITY,
 )
+
+# The VS Code executor can retain an older S5 module object between runs. Keep
+# the hardware asset explicit in this entrypoint so Lula never falls back to
+# the obsolete Eva-Agent troncamp-mani-main path.
+if os.environ.get("S5_TRON2_URDF_PATH"):
+    TRON2_URDF_PATH = Path(os.environ["S5_TRON2_URDF_PATH"]).expanduser().resolve()
 
 # ── 导入功能模块 ──────────────────────────────────────────────────
 from S5.core.physics import (
@@ -422,6 +436,7 @@ print(f"✅ 双臂轨迹扩散器已初始化（最小TCP间距 {DUAL_ARM_MIN_TC
 # 6. 创建仅控制左臂七轴的 Lula IK 控制器
 if not TRON2_URDF_PATH.is_file():
     raise RuntimeError(f"DACH TRON2A URDF 不存在: {TRON2_URDF_PATH}")
+print(f"📄 DACH TRON2A URDF: {TRON2_URDF_PATH}")
 # The task layer may switch this alias after checking both arms.  Keep the
 # configured side as the initial/default selection until the first task.
 if DACH_ARM_SIDE == "left":

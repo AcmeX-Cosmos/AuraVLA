@@ -11,8 +11,13 @@ import time
 # Add execution path for FileTaskClient import
 _aura_root = Path(__file__).resolve().parent.parent.parent
 _execution_path = _aura_root / "aura_execution" / "aura_execution"
-if str(_execution_path) not in sys.path:
-    sys.path.insert(0, str(_execution_path))
+for _path in (
+    _execution_path,
+    _aura_root / "aura_orchestration",
+    _aura_root / "aura_planning",
+):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
 from task_bridge import FileTaskClient
 
@@ -49,11 +54,11 @@ class IsaacRuntimeLauncher:
         self.config = config or IsaacRuntimeConfig()
         self.camera_directory = Path(camera_directory).expanduser().resolve()
         self.entry_path = Path(
-            entry_path or Path(__file__).with_name("start_isaac_runtime.py")
+            entry_path or Path(__file__).with_name("robot").joinpath("robot.py")
         ).expanduser().resolve()
         self.reload_entry_path = Path(
             reload_entry_path
-            or Path(__file__).with_name("start_isaac_runtime.py")
+            or Path(__file__).with_name("robot").joinpath("robot.py")
         ).expanduser().resolve()
         self.camera_entry_path = Path(
             camera_entry_path
@@ -159,7 +164,19 @@ class IsaacRuntimeLauncher:
         camera_directory = repr(str(self.camera_directory))
         prelude = (
             "import os\n"
+            "import sys\n"
+            "import importlib\n"
+            "for _module_name in sorted([_name for _name in list(sys.modules) if _name == 'S5' or _name.startswith('S5.')], key=lambda _name: _name.count('.'), reverse=True):\n"
+            "    _module = sys.modules.pop(_module_name, None)\n"
+            "    if _module is not None and '.' in _module_name:\n"
+            "        _parent = sys.modules.get(_module_name.rsplit('.', 1)[0])\n"
+            "        if _parent is not None and getattr(_parent, _module_name.rsplit('.', 1)[1], None) is _module:\n"
+            "            delattr(_parent, _module_name.rsplit('.', 1)[1])\n"
+            "importlib.invalidate_caches()\n"
+            f"os.environ['AURA_VLA_ROOT'] = {str(_aura_root)!r}\n"
+            f"os.environ['AURA_ISAAC_BRIDGE_ROOT'] = {str(_aura_root / 'aura_hardware' / 'aura_isaac_bridge')!r}\n"
             f"os.environ['AURA_CAMERA_DIR'] = {camera_directory}\n"
+            f"os.environ.setdefault('S5_TRON2_URDF_PATH', {str(_aura_root / 'aura_description' / 'urdf' / 'tron2_v5_DACH_validing' / 'robot.urdf')!r})\n"
         )
         lines = source.splitlines(keepends=True)
         for index, line in enumerate(lines):
