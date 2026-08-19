@@ -24,6 +24,7 @@ setup(
     entry_points={
         'console_scripts': [
             'perception_node = aura_perception.perception_node:main',
+            'nvidia_agent = aura_perception.nvidia_agent:main',
         ],
     },
 )

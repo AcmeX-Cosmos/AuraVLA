@@ -10,17 +10,8 @@ import time
 from typing import Any, Callable, Mapping
 import uuid
 
-# Add paths for local imports
-_aura_root = Path(__file__).resolve().parent.parent.parent.parent
-_orchestration_path = _aura_root / "aura_orchestration" / "aura_orchestration"
-_planning_path = _aura_root / "aura_planning" / "aura_planning"
-
-for _p in [_orchestration_path, _planning_path]:
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
-
-from executor import PickPlaceExecutor
-from schemas import dumps_json, loads_json
+from aura_orchestration.executor import PickPlaceExecutor
+from aura_planning.schemas import dumps_json, loads_json
 
 
 DEFAULT_TASK_BRIDGE_DIR = Path(

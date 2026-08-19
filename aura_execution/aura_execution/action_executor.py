@@ -5,8 +5,8 @@ Executes task actions and monitors progress.
 """
 
 import json
-from typing import Dict, Any
-from aura_execution.task_bridge import TaskBridge
+from typing import Dict, Any, Union
+from aura_execution.task_bridge import IsaacTaskBridge, FileTaskClient
 
 
 class ActionExecutor:
@@ -14,7 +14,7 @@ class ActionExecutor:
     Executes robot actions via task bridge
     """
 
-    def __init__(self, bridge: TaskBridge):
+    def __init__(self, bridge: Union[IsaacTaskBridge, FileTaskClient]):
         self.bridge = bridge
 
     def execute_plan(self, plan: Dict[str, Any]) -> Dict[str, Any]:
@@ -39,7 +39,8 @@ class ActionExecutor:
 
         # Execute via bridge
         try:
-            result = self.bridge.execute(plan_json)
+            result_json = self.bridge.execute(plan_json)
+            result = json.loads(result_json) if isinstance(result_json, str) else result_json
             return result
 
         except Exception as e:

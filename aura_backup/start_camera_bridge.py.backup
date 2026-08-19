@@ -1,0 +1,29 @@
+"""
+Start Isaac Sim Camera Bridge
+
+This script is executed in Isaac Sim to start the RGBD camera bridge.
+It publishes camera frames to /tmp/aura-vla-camera/ for the NVIDIA agent to read.
+"""
+
+from __future__ import annotations
+import sys
+from pathlib import Path
+
+# Add camera bridge path
+_aura_root = Path(__file__).resolve().parent.parent.parent
+_camera_bridge_path = _aura_root / "aura_hardware" / "aura_camera_bridge"
+if str(_camera_bridge_path) not in sys.path:
+    sys.path.insert(0, str(_camera_bridge_path))
+
+from camera_bridge import start_camera_bridge
+
+# Get camera prim path from environment or use default
+import os
+camera_prim_path = os.getenv(
+    "AURA_CAMERA_PRIM_PATH",
+    "/World/DACH_TRON2A/head_pitch_Link/camera"
+)
+
+# Start the camera bridge
+camera_bridge = start_camera_bridge(camera_prim_path=camera_prim_path)
+print(f"✓ Camera bridge started: {camera_prim_path}")

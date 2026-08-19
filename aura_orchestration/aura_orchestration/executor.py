@@ -4,7 +4,7 @@ from collections.abc import Callable, Mapping
 import traceback
 from typing import Any
 
-from schemas import TaskPlan, dumps_json, loads_json
+from aura_planning.schemas import TaskPlan, dumps_json, loads_json
 
 
 class PickPlaceExecutor:

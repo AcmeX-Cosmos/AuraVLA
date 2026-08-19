@@ -17,13 +17,11 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 # AuraVLA ROS2 structure imports
-# nvidia_agent.py location: aura_perception/aura_perception/nvidia_agent.py
-# Project root is 2 levels up
-_aura_root = Path(__file__).resolve().parent.parent.parent
+_aura_root = Path(__file__).resolve().parent.parent.parent.parent.parent
 _camera_bridge_path = _aura_root / "aura_hardware" / "aura_camera_bridge"
 _isaac_bridge_path = _aura_root / "aura_hardware" / "aura_isaac_bridge"
-_execution_path = _aura_root / "aura_execution" / "aura_execution"
-_planning_path = _aura_root / "aura_planning" / "aura_planning"
+_execution_path = _aura_root / "aura_execution" / "aura_execution" / "aura_execution"
+_planning_path = _aura_root / "aura_planning" / "aura_planning" / "aura_planning"
 
 # Add all required paths to sys.path
 for _p in [_camera_bridge_path, _isaac_bridge_path, _execution_path, _planning_path]:
@@ -105,7 +103,7 @@ Example shape: {"scene_objects":[{"object":"杯子","color":"绿色","position":
 
 DEFAULT_NVIDIA_MODEL = "nvidia/nemotron-nano-12b-v2-vl"
 DEFAULT_NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
-DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "aura_bringup" / "config" / "config.yaml"
+DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent.parent / "aura_bringup" / "config" / "config.yaml"
 
 
 class VLMBackend(Protocol):
@@ -750,7 +748,6 @@ def main(argv: list[str] | None = None) -> int:
                 host=args.isaac_host,
                 port=args.isaac_port,
             ),
-            camera_directory=args.camera_dir,
         )
         if not args.no_isaac_autostart
         else None
@@ -874,12 +871,6 @@ def _run_chat_loop(
                 continue
             try:
                 started = runtime_launcher.ensure_ready()
-                if use_camera_bridge:
-                    _wait_for_camera_images(
-                        bridge_paths,
-                        timeout_sec=camera_refresh_timeout_sec,
-                        max_age_sec=camera_max_age_sec,
-                    )
             except Exception as exc:
                 print(f"executor> ERROR: {exc}")
                 continue
@@ -892,12 +883,6 @@ def _run_chat_loop(
                 continue
             try:
                 runtime_launcher.reload()
-                if use_camera_bridge:
-                    _wait_for_camera_images(
-                        bridge_paths,
-                        timeout_sec=camera_refresh_timeout_sec,
-                        max_age_sec=camera_max_age_sec,
-                    )
             except Exception as exc:
                 print(f"executor> ERROR: {exc}")
                 continue
@@ -1183,14 +1168,7 @@ def _camera_frame_age_sec(bridge_paths: Any, *, now: float | None = None) -> flo
         return float("inf")
     try:
         metadata = json.loads(bridge_paths.metadata.read_text(encoding="utf-8"))
-        # ``timestamp`` was emitted by older Isaac bridge launchers. Accept it
-        # while preferring the canonical key so an existing frame can recover
-        # immediately after upgrading the bridge.
-        captured_at = float(
-            metadata.get("captured_at_unix")
-            or metadata.get("timestamp")
-            or 0.0
-        )
+        captured_at = float(metadata.get("captured_at_unix") or 0.0)
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return float("inf")
     if captured_at <= 0:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from schemas import SchemaError, TaskPlan, dumps_json, loads_json
+from aura_planning.schemas import SchemaError, TaskPlan, dumps_json, loads_json
 
 
 class PlannerError(ValueError):

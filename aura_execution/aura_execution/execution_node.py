@@ -12,7 +12,7 @@ from aura_interfaces.action import ExecuteTask
 import json
 import yaml
 
-from aura_execution.task_bridge import TaskBridge, BridgeConfig
+from aura_execution.task_bridge import FileTaskClient
 from aura_execution.action_executor import ActionExecutor
 
 
@@ -36,14 +36,13 @@ class ExecutionNode(Node):
 
         # Initialize task bridge
         bridge_cfg = config.get('execution', {}).get('bridge', {})
-        bridge_config = BridgeConfig(
+        bridge = FileTaskClient(
             directory=bridge_cfg.get('directory', '/tmp/aura-vla-control'),
             timeout_sec=float(bridge_cfg.get('timeout_sec', 300.0)),
-            check_interval_sec=float(bridge_cfg.get('check_interval_sec', 0.5))
+            poll_interval_sec=float(bridge_cfg.get('check_interval_sec', 0.5))
         )
 
-        bridge = TaskBridge(bridge_config)
-        self.executor = ActionExecutor(bridge)
+        self.action_executor = ActionExecutor(bridge)
 
         # Create action server
         self._action_server = ActionServer(
@@ -94,7 +93,7 @@ class ExecutionNode(Node):
             goal_handle.publish_feedback(feedback_msg)
 
             # Execute via bridge
-            result_dict = self.executor.execute_plan(plan_dict)
+            result_dict = self.action_executor.execute_plan(plan_dict)
 
             # Send final feedback
             feedback_msg.current_action = len(request.plan.actions)

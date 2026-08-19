@@ -1,0 +1,66 @@
+#!/bin/bash
+# AuraVLA Complete System Launcher
+# Starts NVIDIA Agent with full VLM, camera, and Isaac Sim integration
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+echo "============================================================"
+echo "AuraVLA - NVIDIA Agent Interactive Mode"
+echo "============================================================"
+echo ""
+
+# Check if workspace is sourced
+if [ -z "$AMENT_PREFIX_PATH" ]; then
+    echo "❌ ROS 2 workspace not sourced!"
+    echo ""
+    echo "Please run first:"
+    echo "  cd $PROJECT_ROOT"
+    echo "  source install/setup.bash"
+    echo ""
+    exit 1
+fi
+
+# Deactivate conda if active
+if [ -n "$CONDA_DEFAULT_ENV" ]; then
+    echo "ℹ️  Conda environment detected: $CONDA_DEFAULT_ENV"
+    echo "   Deactivating to use system Python for ROS 2..."
+    eval "$(conda shell.bash hook)"
+    conda deactivate
+    echo ""
+fi
+
+# Check NVIDIA API key
+if [ -z "$NVIDIA_API_KEY" ]; then
+    echo "⚠️  Warning: NVIDIA_API_KEY not set"
+    echo "   VLM features may not work without API key"
+    echo ""
+    echo "Set it with:"
+    echo "  export NVIDIA_API_KEY='your-api-key-here'"
+    echo ""
+    read -p "Continue anyway? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        exit 1
+    fi
+fi
+
+echo "🚀 Starting NVIDIA Agent..."
+echo ""
+echo "Features:"
+echo "  ✓ Natural language understanding (Chinese/English)"
+echo "  ✓ RGBD camera integration"
+echo "  ✓ Scene analysis with VLM"
+echo "  ✓ Direct Isaac Sim control"
+echo ""
+echo "Type 'help' for commands, Ctrl+C to quit"
+echo "============================================================"
+echo ""
+
+# Run nvidia_agent in chat mode with execution enabled
+exec /usr/bin/python3 -m aura_perception.nvidia_agent \
+    --chat \
+    --execute \
+    "$@"

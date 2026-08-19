@@ -10,7 +10,7 @@ import time
 
 # Add execution path for FileTaskClient import
 _aura_root = Path(__file__).resolve().parent.parent.parent
-_execution_path = _aura_root / "aura_execution" / "aura_execution"
+_execution_path = _aura_root / "aura_execution" / "aura_execution" / "aura_execution"
 if str(_execution_path) not in sys.path:
     sys.path.insert(0, str(_execution_path))
 
@@ -42,18 +42,15 @@ class IsaacRuntimeLauncher:
         entry_path: str | Path | None = None,
         reload_entry_path: str | Path | None = None,
         camera_entry_path: str | Path | None = None,
-        camera_directory: str | Path = "/tmp/aura-vla-camera",
         source_sender: Callable[[str], str] | None = None,
     ) -> None:
         self.task_client = task_client
         self.config = config or IsaacRuntimeConfig()
-        self.camera_directory = Path(camera_directory).expanduser().resolve()
         self.entry_path = Path(
-            entry_path or Path(__file__).with_name("start_isaac_runtime.py")
+            entry_path or Path(__file__).with_name("restore_isaac_runtime.py")
         ).expanduser().resolve()
         self.reload_entry_path = Path(
-            reload_entry_path
-            or Path(__file__).with_name("start_isaac_runtime.py")
+            reload_entry_path or (Path(__file__).parent.parent / "main.py")
         ).expanduser().resolve()
         self.camera_entry_path = Path(
             camera_entry_path
@@ -69,9 +66,7 @@ class IsaacRuntimeLauncher:
                 f"Isaac runtime entry does not exist: {self.entry_path}"
             )
 
-        source = self._with_camera_environment(
-            self.entry_path.read_text(encoding="utf-8")
-        )
+        source = self.entry_path.read_text(encoding="utf-8")
         try:
             raw_response = self._source_sender(source)
         except OSError as exc:
@@ -99,22 +94,9 @@ class IsaacRuntimeLauncher:
             raise IsaacRuntimeError(
                 f"Isaac camera entry does not exist: {self.camera_entry_path}"
             )
-        source = self._with_camera_environment(
-            self.camera_entry_path.read_text(encoding="utf-8")
-        )
-        # The VS Code executor evaluates source with its own globals, so a
-        # script's ``if __name__ == '__main__'`` block is not reliable. The
-        # current launcher is exec-safe already; this explicit fallback also
-        # keeps older camera scripts from becoming a silent no-op.
-        source += (
-            "\n\n"
-            "if 'start_camera_bridge' in globals() and "
-            "globals().get('camera_bridge') is None:\n"
-            "    camera_bridge = start_camera_bridge()\n"
-        )
         try:
             raw_response = self._source_sender(
-                source
+                self.camera_entry_path.read_text(encoding="utf-8")
             )
         except OSError as exc:
             raise IsaacRuntimeError(
@@ -131,9 +113,7 @@ class IsaacRuntimeLauncher:
             )
         try:
             raw_response = self._source_sender(
-                self._with_camera_environment(
-                    self.reload_entry_path.read_text(encoding="utf-8")
-                )
+                self.reload_entry_path.read_text(encoding="utf-8")
             )
         except OSError as exc:
             raise IsaacRuntimeError(
@@ -154,21 +134,6 @@ class IsaacRuntimeLauncher:
         if not response:
             raise IsaacRuntimeError("Isaac VSCode executor returned an empty response")
         return response.decode("utf-8", errors="replace")
-
-    def _with_camera_environment(self, source: str) -> str:
-        camera_directory = repr(str(self.camera_directory))
-        prelude = (
-            "import os\n"
-            f"os.environ['AURA_CAMERA_DIR'] = {camera_directory}\n"
-        )
-        lines = source.splitlines(keepends=True)
-        for index, line in enumerate(lines):
-            if line.lstrip().startswith("from __future__ import"):
-                insert_at = index + 1
-                return "".join(lines[:insert_at]) + prelude + "".join(
-                    lines[insert_at:]
-                )
-        return prelude + source
 
     @staticmethod
     def _validate_response(raw_response: str) -> None:
