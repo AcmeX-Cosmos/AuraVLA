@@ -51,11 +51,16 @@ class IsaacTaskBridge:
         self._task: asyncio.Task[None] | None = None
         self._last_request_id: str | None = None
         self._last_heartbeat = 0.0
+        self._owner_token = uuid.uuid4().hex
+        self._owner_path = self.paths.directory / "bridge.owner"
 
     def start(self) -> "IsaacTaskBridge":
         if self._task is not None and not self._task.done():
             return self
         self.paths.directory.mkdir(parents=True, exist_ok=True)
+        owner_tmp = self._owner_path.with_suffix(".tmp")
+        owner_tmp.write_text(self._owner_token, encoding="utf-8")
+        owner_tmp.replace(self._owner_path)
         if self.paths.request.is_file():
             try:
                 existing_request = json.loads(
@@ -112,6 +117,13 @@ class IsaacTaskBridge:
         app = get_app()
         while True:
             try:
+                try:
+                    owner_token = self._owner_path.read_text(encoding="utf-8").strip()
+                except OSError:
+                    owner_token = ""
+                if owner_token != self._owner_token:
+                    await app.next_update_async()
+                    continue
                 now = time.time()
                 if now - self._last_heartbeat >= 1.0:
                     self._write_json(

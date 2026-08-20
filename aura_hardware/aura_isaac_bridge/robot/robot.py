@@ -35,6 +35,107 @@ _BOOTSTRAP_S5_DIR = _BOOTSTRAP_STUDY_DIR / "S5"
 _AURA_ISAAC_BRIDGE_DIR = Path(
     os.environ.get("AURA_ISAAC_BRIDGE_ROOT", Path(__file__).resolve().parents[1])
 ).expanduser().resolve()
+
+
+def _load_s5_runtime_config() -> None:
+    """Apply S5's config.yaml values before importing state constants."""
+    config_path = _BOOTSTRAP_PROJECT_ROOT / "Study" / "S5" / "config" / "config.yaml"
+    if not config_path.is_file():
+        config_path = _BOOTSTRAP_PROJECT_ROOT / "src" / "Study" / "S5" / "config" / "config.yaml"
+    if not config_path.is_file():
+        return
+    try:
+        import yaml
+
+        settings = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        print(f"⚠️ 无法加载 S5 config.yaml，使用环境变量/默认值: {exc}")
+        return
+    robot = settings.get("robot") or {}
+    camera = settings.get("camera") or {}
+    perception = settings.get("perception") or {}
+    calibration = perception.get("graspnet_calibration") or {}
+    scene = settings.get("scene") or {}
+    basket = ((scene.get("objects") or {}).get("basket") or {})
+
+    def set_value(env_name, value):
+        if value is not None:
+            os.environ[env_name] = str(value)
+
+    set_value("S5_CAMERA_PRIM_PATH", camera.get("prim_path"))
+    set_value("S5_DACH_ARM_SIDE", str(robot.get("arm_side", "right")).lower())
+    set_value("S5_DACH_BASE_XY_JSON", json.dumps(robot.get("base_xy")))
+    set_value("S5_GRASPNET_CALIBRATION_ENABLED", str(bool(calibration.get("enabled", False))).lower())
+    set_value("S5_GRASPNET_CAMERA_OFFSET_JSON", json.dumps(calibration.get("camera_offset_m", [0.0, 0.0, 0.0])))
+    set_value("S5_GRASPNET_CALIBRATION_MAX_CORRECTION_M", calibration.get("max_correction_m", 0.06))
+    set_value("S5_BASKET_RESET_POSITION_JSON", json.dumps(basket.get("reset_position")))
+    set_value("S5_BASKET_RESET_ORIENTATION_JSON", json.dumps(basket.get("reset_orientation")))
+
+    # Keep this mapping aligned with Study/S5/main.py. Values from config.yaml
+    # take precedence over module defaults, while explicit shell overrides win.
+    config_env = {
+        "S5_DACH_GRASP_HEIGHT_OFFSET": ("grasp_height_offset", 0.020),
+        "S5_DACH_GRASP_YAW_OFFSET_DEG": ("grasp_yaw_offset_deg", 0.0),
+        "S5_BANANA_GRASP_TILT_DEG": ("banana_grasp_tilt_deg", 30.0),
+        "S5_BANANA_NEAR_SIDE_OFFSET": ("banana_near_side_offset_m", 0.0),
+        "S5_BANANA_MIN_SHORT_AXIS_ALIGNMENT": ("banana_min_short_axis_alignment", 0.92),
+        "S5_MIN_GRIPPER_TABLE_CLEARANCE": ("min_gripper_table_clearance_m", 0.0),
+        "S5_TABLE_CLEARANCE_ABORT_MARGIN": ("table_clearance_abort_margin_m", 0.0),
+        "S5_GRASP_CLEARANCE_GUARD_PAD": ("grasp_clearance_guard_pad_m", 0.0005),
+        "S5_GRASP_MIN_HEIGHT_FRACTION": ("grasp_min_height_fraction", 0.10),
+        "S5_BASKET_PLANNING_MARGIN": ("basket_planning_margin_m", 0.03),
+        "S5_BASKET_PLACE_TABLE_CLEARANCE": ("basket_place_table_clearance_m", 0.003),
+        "S5_MAX_GRASP_APPROACH_TILT_DEG": ("max_grasp_approach_tilt_deg", 60.0),
+        "S5_TARGET_GRASP_APPROACH_TILT_DEG": ("target_grasp_approach_tilt_deg", 55.0),
+        "S5_ACTION_WAYPOINT_LIMIT": ("action_waypoint_limit", 3),
+        "S5_GRIPPER_CLOSE_FRAMES": ("gripper_close_frames", 20),
+        "S5_GRIPPER_MAX_EFFORT": ("gripper_max_effort_n", 3.0),
+        "S5_GRIPPER_STIFFNESS": ("gripper_stiffness", 250.0),
+        "S5_GRIPPER_DAMPING": ("gripper_damping", 8.0),
+        "S5_BANANA_STATIC_FRICTION": ("banana_static_friction", 1.2),
+        "S5_BANANA_DYNAMIC_FRICTION": ("banana_dynamic_friction", 1.0),
+        "S5_GRIPPER_STATIC_FRICTION": ("gripper_static_friction", 6.0),
+        "S5_GRIPPER_DYNAMIC_FRICTION": ("gripper_dynamic_friction", 5.0),
+        "S5_PHYSX_CONTACT_OFFSET": ("physx_contact_offset_m", 0.02),
+        "S5_PHYSX_REST_OFFSET": ("physx_rest_offset_m", 0.001),
+        "S5_PHYSX_SOLVER_POSITION_ITERATIONS": ("physx_solver_position_iterations", 32),
+        "S5_PHYSX_SOLVER_VELOCITY_ITERATIONS": ("physx_solver_velocity_iterations", 8),
+        "S5_PHYSX_MAX_DEPENETRATION_VELOCITY": ("physx_max_depenetration_velocity", 0.2),
+        "S5_GRIPPER_CONTACT_RESIDUAL": ("gripper_contact_residual_m", 0.0015),
+        "S5_GRIPPER_CONTACT_FORCE_THRESHOLD": ("gripper_contact_force_threshold_n", 0.25),
+        "S5_GRIPPER_CONTACT_PRELOAD_RESIDUAL": ("gripper_contact_preload_residual_m", 0.0015),
+        "S5_GRIPPER_CONTACT_HOLD_PRELOAD": ("gripper_contact_hold_preload_m", 0.003),
+        "S5_GRIPPER_CONTACT_SETTLE_FRAMES": ("gripper_contact_settle_frames", 15),
+        "S5_GRIPPER_PRELOAD_CONFIRM_FRAMES": ("gripper_preload_confirm_frames", 3),
+        "S5_BANANA_GRIPPER_CLOSE_POSITION": ("banana_gripper_close_position", 0.0),
+        "S5_BANANA_PLANAR_REFINEMENT_STEPS": ("banana_planar_refinement_steps", 2),
+        "S5_BANANA_PLANAR_CENTER_TOLERANCE": ("banana_planar_center_tolerance_m", 0.008),
+        "S5_BANANA_MAX_PLANAR_CORRECTION": ("banana_max_planar_correction_m", 0.04),
+        "S5_PATH_CLEARANCE": ("path_clearance_m", 0.10),
+        "S5_TRAJECTORY_MAX_JOINT_STEP": ("trajectory_max_joint_step_rad", 0.008),
+        "S5_TRAJECTORY_MIN_FRAMES": ("trajectory_min_frames", 8),
+        "S5_TRAJECTORY_SETTLE_FRAMES": ("trajectory_settle_frames", 12),
+        "S5_GRASP_APPROACH_MAX_JOINT_STEP": ("grasp_approach_max_joint_step_rad", 0.018),
+        "S5_GRASP_APPROACH_MIN_FRAMES": ("grasp_approach_min_frames", 24),
+        "S5_CARTESIAN_WAYPOINT_SPACING": ("cartesian_waypoint_spacing_m", 0.04),
+        "S5_TRANSPORT_LIFT_HEIGHT": ("transport_lift_height_m", 0.32),
+        "S5_CARRY_CARTESIAN_WAYPOINT_SPACING": ("carry_cartesian_waypoint_spacing_m", 0.12),
+        "S5_GRASP_REFINEMENT_STEPS": ("grasp_refinement_steps", 0),
+        "S5_CARRY_APEX_CLEARANCE": ("carry_apex_clearance_m", 0.15),
+        "S5_DUAL_ARM_MIN_TCP_SEPARATION": ("dual_arm_min_tcp_separation_m", 0.18),
+    }
+    for env_name, (key, default) in config_env.items():
+        if env_name not in os.environ and key in robot:
+            set_value(env_name, robot.get(key, default))
+    set_value("S5_BANANA_USE_SIMULATED_ATTACHMENT", str(bool(robot.get("banana_use_simulated_attachment", True))).lower())
+    set_value("S5_USE_GRASPNET", str(bool(robot.get("use_graspnet", True))).lower())
+    set_value("S5_USE_GRASPNET_ORIENTATION", str(bool(robot.get("use_graspnet_orientation", False))).lower())
+    set_value("S5_PHYSX_ENABLE_CCD", str(bool(robot.get("physx_enable_ccd", False))).lower())
+    set_value("S5_PHYSX_CONVEX_SHRINK_WRAP", str(bool(robot.get("physx_convex_shrink_wrap", True))).lower())
+    set_value("S5_SCENE_OBJECTS_JSON", json.dumps(scene.get("objects") or {}, ensure_ascii=False))
+
+
+_load_s5_runtime_config()
 if str(_BOOTSTRAP_STUDY_DIR) not in sys.path:
     sys.path.insert(0, str(_BOOTSTRAP_STUDY_DIR))
 _s5_package = sys.modules.get("S5")
