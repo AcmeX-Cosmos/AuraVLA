@@ -14,7 +14,7 @@ CAMERA_DIR="${AURA_CAMERA_DIR:-/tmp/aura-vla-camera}"
 TASK_DIR="${AURA_VLA_TASK_DIR:-/tmp/aura-vla-control}"
 URDF_PATH="${S5_TRON2_URDF_PATH:-$PROJECT_ROOT/aura_description/urdf/tron2_v5_DACH_validing/robot.urdf}"
 ROBOT_ENTRY="$PROJECT_ROOT/aura_hardware/aura_isaac_bridge/robot/robot.py"
-EXECUTOR_CLIENT="$PROJECT_ROOT/scripts/isaac_vscode_run.py"
+EXECUTOR_CLIENT="$PROJECT_ROOT/aura_scripts/isaac_vscode_run.py"
 
 if [[ ! -d "$EVA_AGENT_ROOT/Study/S5" ]]; then
     echo "ERROR: Eva-Agent S5 runtime not found:" >&2

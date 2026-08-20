@@ -8,7 +8,7 @@ AuraVLA 使用已经打开的 Isaac Sim VS Code Edition 实例运行机械臂。
 
 ```bash
 cd /home/acmex/Code/learning/courses/AuraVLA
-./scripts/start_isaac_robot.sh
+./aura_scripts/start_isaac_robot.sh
 ```
 
 看到以下信息后才继续下一步：
@@ -26,7 +26,7 @@ Isaac task bridge started: /tmp/aura-vla-control
 ```bash
 cd /home/acmex/Code/learning/courses/AuraVLA
 source install/setup.bash
-./scripts/start_nvidia_agent.sh
+./aura_scripts/start_nvidia_agent.sh
 ```
 
 Agent 启动后会显示：
@@ -93,7 +93,7 @@ ls -lh /tmp/aura-vla-camera/
 
 ```bash
 cd /home/acmex/Code/learning/courses/AuraVLA
-./scripts/start_isaac_robot.sh
+./aura_scripts/start_isaac_robot.sh
 ```
 
 ### Camera bridge 没有新 RGBD 帧
@@ -102,7 +102,7 @@ cd /home/acmex/Code/learning/courses/AuraVLA
 
 ```bash
 cd /home/acmex/Code/learning/courses/AuraVLA
-./scripts/start_isaac_robot.sh
+./aura_scripts/start_isaac_robot.sh
 ```
 
 不要直接运行普通系统 Python 或 `/home/acmex/Code/learning/isaacsim/python.sh` 来代替 VS Code Edition 注入流程。
@@ -115,7 +115,7 @@ cd /home/acmex/Code/learning/courses/AuraVLA
 cat /tmp/aura-vla-control/status.json
 ```
 
-如果 `ready` 不是 `true`，重新执行 `./scripts/start_isaac_robot.sh`，等待 `S5 机器人运行时就绪` 后再提交任务。
+如果 `ready` 不是 `true`，重新执行 `./aura_scripts/start_isaac_robot.sh`，等待 `S5 机器人运行时就绪` 后再提交任务。
 
 ### 退出
 

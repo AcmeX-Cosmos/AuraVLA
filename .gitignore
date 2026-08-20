@@ -20,3 +20,5 @@ dist/
 # Temp
 *.tmp
 *.log
+
+.vscode/
