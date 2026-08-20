@@ -1,0 +1,67 @@
+api_version: 1.0
+
+root_link: base_Link
+
+cspace:
+  - proximal_pitch_R_Joint
+  - proximal_roll_R_Joint
+  - proximal_yaw_R_Joint
+  - elbow_R_Joint
+  - wrist_yaw_R_Joint
+  - wrist_pitch_R_Joint
+  - wrist_roll_R_Joint
+
+default_q: [0.8477, -0.124, 0.1424, -2.3204, 0.0, 0.0, 0.0]
+acceleration_limits: [3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0]
+jerk_limits: [100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0]
+
+cspace_to_urdf_rules:
+  - {name: head_yaw_Joint, rule: fixed, value: 0.0}
+  - {name: head_pitch_Joint, rule: fixed, value: 0.4008}
+  - {name: proximal_pitch_L_Joint, rule: fixed, value: 0.8477}
+  - {name: proximal_roll_L_Joint, rule: fixed, value: 0.124}
+  - {name: proximal_yaw_L_Joint, rule: fixed, value: -0.1424}
+  - {name: elbow_L_Joint, rule: fixed, value: -2.3204}
+  - {name: wrist_yaw_L_Joint, rule: fixed, value: 0.0}
+  - {name: wrist_pitch_L_Joint, rule: fixed, value: 0.0}
+  - {name: wrist_roll_L_Joint, rule: fixed, value: 0.0}
+  - {name: grasper_base_L_Joint, rule: fixed, value: 0.0}
+  - {name: grasper_L_bar_left_Joint, rule: fixed, value: 0.0}
+  - {name: grasper_L_bar_right_Joint, rule: fixed, value: 0.0}
+  - {name: grasper_L_crank_right_Joint, rule: fixed, value: 0.0}
+  - {name: grasper_L_drive_Joint, rule: fixed, value: 0.0}
+  - {name: grasper_L_jaw_left_Joint, rule: fixed, value: 0.0}
+  - {name: grasper_L_jaw_right_Joint, rule: fixed, value: 0.0}
+  - {name: grasper_L_nut_Joint, rule: fixed, value: 0.0}
+  - {name: grasper_base_R_Joint, rule: fixed, value: 0.0}
+  - {name: grasper_R_bar_left_Joint, rule: fixed, value: 0.0}
+  - {name: grasper_R_bar_right_Joint, rule: fixed, value: 0.0}
+  - {name: grasper_R_crank_right_Joint, rule: fixed, value: 0.0}
+  - {name: grasper_R_drive_Joint, rule: fixed, value: 0.0}
+  - {name: grasper_R_jaw_left_Joint, rule: fixed, value: 0.0}
+  - {name: grasper_R_jaw_right_Joint, rule: fixed, value: 0.0}
+  - {name: grasper_R_nut_Joint, rule: fixed, value: 0.0}
+
+collision_spheres:
+  - proximal_pitch_R_Link:
+      - {center: [0.0, 0.0, 0.0], radius: 0.04}
+  - proximal_roll_R_Link:
+      - {center: [0.0, 0.0, 0.0], radius: 0.06}
+  - proximal_yaw_R_Link:
+      - {center: [0.0, 0.0, -0.05], radius: 0.04}
+  - elbow_R_Link:
+      - {center: [0.0, 0.0, -0.1], radius: 0.05}
+  - wrist_yaw_R_Link:
+      - {center: [0.0, 0.0, 0.0], radius: 0.03}
+  - wrist_pitch_R_Link:
+      - {center: [0.0, 0.0, 0.0], radius: 0.03}
+  - wrist_roll_R_Link:
+      - {center: [0.0, 0.0, -0.03], radius: 0.03}
+  - grasper_base_R_Link:
+      - {center: [0.0, 0.0, -0.04], radius: 0.045}
+  - grasper_R_jaw_left_Link:
+      - {center: [0.0, 0.01764, -0.128055], radius: 0.024}
+      - {center: [0.0, 0.01764, -0.166055], radius: 0.024}
+  - grasper_R_jaw_right_Link:
+      - {center: [0.0, -0.01764, -0.128055], radius: 0.024}
+      - {center: [0.0, -0.01764, -0.166055], radius: 0.024}

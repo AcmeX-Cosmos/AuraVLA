@@ -1,1 +1,1 @@
-"""Standalone S5 visualization utilities."""
+"""Standalone AuraVLA visualization utilities."""

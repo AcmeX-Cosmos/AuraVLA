@@ -14,7 +14,7 @@ cd /home/acmex/Code/learning/courses/AuraVLA
 看到以下信息后才继续下一步：
 
 ```text
-=== S5 机器人运行时就绪 ===
+=== AuraVLA 机器人运行时就绪 ===
 Isaac runtime loaded in VS Code Edition
 Isaac task bridge started: /tmp/aura-vla-control
 ```
@@ -54,7 +54,7 @@ Isaac camera: /tmp/aura-vla-camera
 
 ```text
 /isaac       恢复当前 Isaac Sim VS Code Edition 运行时
-/reload      从当前 S5/AuraVLA 源码重新加载运行时
+/reload      从当前 AuraVLA 源码重新加载运行时
 /camera      设置并检查 Isaac 相机目录
 /rgb PATH    使用指定 RGB 图片
 /depth PATH  使用指定深度图片
@@ -115,7 +115,7 @@ cd /home/acmex/Code/learning/courses/AuraVLA
 cat /tmp/aura-vla-control/status.json
 ```
 
-如果 `ready` 不是 `true`，重新执行 `./aura_scripts/start_isaac_robot.sh`，等待 `S5 机器人运行时就绪` 后再提交任务。
+如果 `ready` 不是 `true`，重新执行 `./aura_scripts/start_isaac_robot.sh`，等待 `AuraVLA 机器人运行时就绪` 后再提交任务。
 
 ### 退出
 

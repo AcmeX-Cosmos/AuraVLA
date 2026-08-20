@@ -5,6 +5,10 @@ setup(
     version='1.0.0',
     packages=[],
     py_modules=['isaac_bridge_node'],
+    data_files=[
+        ('share/ament_index/resource_index/packages', ['resource/aura_isaac_bridge']),
+        ('share/aura_isaac_bridge', ['package.xml']),
+    ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='AuraVLA Team',

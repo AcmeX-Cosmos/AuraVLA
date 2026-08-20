@@ -442,7 +442,7 @@ class NvidiaBuildBackend:
         if not api_key:
             raise RuntimeError(
                 "NVIDIA_API_KEY is not set. Generate a key at build.nvidia.com "
-                "and export it before starting S5."
+                "and export it before starting AuraVLA."
             )
         return api_key
 
@@ -559,18 +559,18 @@ class NvidiaVLAgent:
 def _load_yaml_config(config_path: str | Path) -> dict[str, Any]:
     path = Path(config_path).expanduser().resolve()
     if not path.is_file():
-        raise FileNotFoundError(f"S5 config does not exist: {path}")
+        raise FileNotFoundError(f"AuraVLA config does not exist: {path}")
     try:
         import yaml
     except ImportError as exc:
         raise RuntimeError(
-            "Reading config.yaml requires PyYAML. Run S5 with Isaac Python."
+            "Reading config.yaml requires PyYAML. Run with the AuraVLA/Isaac Python environment."
         ) from exc
     loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
     if loaded is None:
         return {}
     if not isinstance(loaded, Mapping):
-        raise ValueError("S5 config root must be a YAML object")
+        raise ValueError("AuraVLA config root must be a YAML object")
     return dict(loaded)
 
 
@@ -593,7 +593,7 @@ def main(argv: list[str] | None = None) -> int:
     config_parser = argparse.ArgumentParser(add_help=False)
     config_parser.add_argument(
         "--config",
-        default=os.getenv("S5_CONFIG", str(DEFAULT_CONFIG_PATH)),
+        default=os.getenv("AURA_CONFIG", str(DEFAULT_CONFIG_PATH)),
     )
     config_args, _ = config_parser.parse_known_args(raw_argv)
     settings = _load_yaml_config(config_args.config)
@@ -607,12 +607,12 @@ def main(argv: list[str] | None = None) -> int:
     quick_commands = dict(agent_settings.get("quick_commands") or {})
 
     parser = argparse.ArgumentParser(
-        description="Run the S5 NVIDIA vision-language DACH robot task agent."
+        description="Run the AuraVLA NVIDIA vision-language DACH robot task agent."
     )
     parser.add_argument(
         "--config",
         default=config_args.config,
-        help="Path to the S5 YAML configuration file",
+        help="Path to the AuraVLA YAML configuration file",
     )
     parser.add_argument("--instruction", help="Natural-language robot task")
     parser.add_argument("--rgb", help="Path to an RGB image")
@@ -699,7 +699,7 @@ def main(argv: list[str] | None = None) -> int:
         "--no-isaac-autostart",
         action="store_true",
         default=not bool(isaac_settings.get("autostart", True)),
-        help="Do not restore the Isaac S5 runtime when its heartbeat is stale",
+        help="Do not restore the AuraVLA Isaac runtime when its heartbeat is stale",
     )
     args = parser.parse_args(raw_argv)
 
@@ -901,7 +901,7 @@ def _run_chat_loop(
             except Exception as exc:
                 print(f"executor> ERROR: {exc}")
                 continue
-            print("executor> Isaac runtime reloaded from current S5 source")
+            print("executor> Isaac runtime reloaded from current AuraVLA source")
             continue
         if message.startswith("/rgb "):
             current_rgb = message[5:].strip()
@@ -1065,10 +1065,20 @@ def _normalize_scene_task_names(
             response[field] = resolver.canonicalize(response[field])
     target_objects = response.get("target_objects")
     if isinstance(target_objects, list):
-        response["target_objects"] = [
-            resolver.canonicalize(item) if not isinstance(item, Mapping) else item
-            for item in target_objects
-        ]
+        normalized_objects = []
+        seen_objects = set()
+        for item in target_objects:
+            normalized = (
+                resolver.canonicalize(item)
+                if not isinstance(item, Mapping)
+                else item
+            )
+            dedupe_key = normalized if isinstance(normalized, str) else repr(normalized)
+            if dedupe_key in seen_objects:
+                continue
+            seen_objects.add(dedupe_key)
+            normalized_objects.append(normalized)
+        response["target_objects"] = normalized_objects
     actions = response.get("actions")
     if isinstance(actions, list):
         for action in actions:

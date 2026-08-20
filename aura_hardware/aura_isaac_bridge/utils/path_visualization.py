@@ -28,7 +28,7 @@ def _load_path_visualization_config() -> dict:
 
 _CONFIG = _load_path_visualization_config()
 DEFAULT_ENABLED = bool(_CONFIG.get("enabled", True))
-DEFAULT_ROOT_PATH = str(_CONFIG.get("root_prim_path", "/World/S5Debug/PlannedPath"))
+DEFAULT_ROOT_PATH = str(_CONFIG.get("root_prim_path", "/World/AuraDebug/PlannedPath"))
 DEFAULT_REFRESH_INTERVAL_SEC = max(
     float(_CONFIG.get("refresh_interval_sec", 0.5)),
     0.0,

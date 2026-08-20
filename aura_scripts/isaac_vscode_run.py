@@ -17,15 +17,16 @@ def with_environment(source: str, project_root: Path, bridge_root: Path) -> str:
         "import sys\n"
         "import importlib\n"
         "import importlib.machinery\n"
+        "from importlib._bootstrap_external import SourceLoader\n"
         f"_aura_source_root = {str(bridge_root)!r}\n"
-        "_original_source_get_code = importlib.machinery.SourceFileLoader.get_code\n"
         "def _aura_source_only_get_code(self, fullname):\n"
         "    _source_filename = self.get_filename(fullname)\n"
         "    if os.path.realpath(_source_filename).startswith(os.path.realpath(_aura_source_root) + os.sep):\n"
         "        return self.source_to_code(self.get_data(_source_filename), _source_filename)\n"
-        "    return _original_source_get_code(self, fullname)\n"
+        "    return SourceLoader.get_code(self, fullname)\n"
+        "# Idempotent: the fallback above always targets the stdlib implementation.\n"
         "importlib.machinery.SourceFileLoader.get_code = _aura_source_only_get_code\n"
-        "_previous_state_module = sys.modules.get('S5.core.state')\n"
+        "_previous_state_module = sys.modules.get('aura_isaac_bridge.core.state')\n"
         "_previous_state = getattr(_previous_state_module, 'state', None)\n"
         "if _previous_state is not None:\n"
         "    for _bridge_name in ('task_bridge', 'camera_bridge'):\n"
@@ -43,7 +44,7 @@ def with_environment(source: str, project_root: Path, bridge_root: Path) -> str:
         "    if type(_previous_owner).__name__ in {'IsaacTaskBridge', 'IsaacCameraBridge'}:\n"
         "        _previous_async_task.cancel()\n"
         "        print(f'Cancelled stale AuraVLA bridge task: {type(_previous_owner).__name__}')\n"
-        "for _module_name in sorted([_name for _name in list(sys.modules) if _name == 'S5' or _name.startswith('S5.')], key=lambda _name: _name.count('.'), reverse=True):\n"
+        "for _module_name in sorted([_name for _name in list(sys.modules) if _name == 'aura_isaac_bridge' or _name.startswith('aura_isaac_bridge.')], key=lambda _name: _name.count('.'), reverse=True):\n"
         "    _module = sys.modules.pop(_module_name, None)\n"
         "    if _module is not None and '.' in _module_name:\n"
         "        _parent = sys.modules.get(_module_name.rsplit('.', 1)[0])\n"
@@ -52,10 +53,9 @@ def with_environment(source: str, project_root: Path, bridge_root: Path) -> str:
         "importlib.invalidate_caches()\n"
         f"os.environ['AURA_VLA_ROOT'] = {str(project_root)!r}\n"
         f"os.environ['AURA_ISAAC_BRIDGE_ROOT'] = {str(bridge_root)!r}\n"
-        f"os.environ['EVA_AGENT_ROOT'] = {os.environ.get('EVA_AGENT_ROOT', '/home/acmex/Code/learning/courses/Eva-Agent')!r}\n"
         f"os.environ['AURA_CAMERA_DIR'] = {os.environ.get('AURA_CAMERA_DIR', '/tmp/aura-vla-camera')!r}\n"
         f"os.environ['AURA_VLA_TASK_DIR'] = {os.environ.get('AURA_VLA_TASK_DIR', '/tmp/aura-vla-control')!r}\n"
-        f"os.environ['S5_TRON2_URDF_PATH'] = {os.environ.get('S5_TRON2_URDF_PATH', '/home/acmex/Code/learning/TRONCamp/troncamp-mani/embodiments/tron2_v5_DACH_validating/robot.urdf')!r}\n"
+        f"os.environ.setdefault('AURA_TRON2_URDF_PATH', {str(project_root / 'aura_description' / 'urdf' / 'tron2_v5_DACH_validing' / 'robot.urdf')!r})\n"
     )
     lines = source.splitlines(keepends=True)
     for index, line in enumerate(lines):
@@ -67,8 +67,8 @@ def with_environment(source: str, project_root: Path, bridge_root: Path) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('source', type=Path)
-    parser.add_argument('--host', default=os.getenv('EVA_AGENT_ISAAC_HOST', '127.0.0.1'))
-    parser.add_argument('--port', type=int, default=int(os.getenv('EVA_AGENT_ISAAC_PORT', '8226')))
+    parser.add_argument('--host', default=os.getenv('AURA_ISAAC_HOST', '127.0.0.1'))
+    parser.add_argument('--port', type=int, default=int(os.getenv('AURA_ISAAC_PORT', '8226')))
     parser.add_argument('--timeout', type=float, default=300.0)
     args = parser.parse_args()
     source_path = args.source.expanduser().resolve()

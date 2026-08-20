@@ -37,7 +37,7 @@ class IsaacRuntimeConfig:
 
 
 class IsaacRuntimeLauncher:
-    """Restores the Isaac-side S5 bridges through the VSCode executor."""
+    """Restores the AuraVLA Isaac bridges through the VS Code executor."""
 
     def __init__(
         self,
@@ -166,7 +166,7 @@ class IsaacRuntimeLauncher:
             "import os\n"
             "import sys\n"
             "import importlib\n"
-            "for _module_name in sorted([_name for _name in list(sys.modules) if _name == 'S5' or _name.startswith('S5.')], key=lambda _name: _name.count('.'), reverse=True):\n"
+            "for _module_name in sorted([_name for _name in list(sys.modules) if _name == 'aura_isaac_bridge' or _name.startswith('aura_isaac_bridge.')], key=lambda _name: _name.count('.'), reverse=True):\n"
             "    _module = sys.modules.pop(_module_name, None)\n"
             "    if _module is not None and '.' in _module_name:\n"
             "        _parent = sys.modules.get(_module_name.rsplit('.', 1)[0])\n"
@@ -176,7 +176,7 @@ class IsaacRuntimeLauncher:
             f"os.environ['AURA_VLA_ROOT'] = {str(_aura_root)!r}\n"
             f"os.environ['AURA_ISAAC_BRIDGE_ROOT'] = {str(_aura_root / 'aura_hardware' / 'aura_isaac_bridge')!r}\n"
             f"os.environ['AURA_CAMERA_DIR'] = {camera_directory}\n"
-            f"os.environ.setdefault('S5_TRON2_URDF_PATH', {str(_aura_root / 'aura_description' / 'urdf' / 'tron2_v5_DACH_validing' / 'robot.urdf')!r})\n"
+            f"os.environ.setdefault('AURA_TRON2_URDF_PATH', {str(_aura_root / 'aura_description' / 'urdf' / 'tron2_v5_DACH_validing' / 'robot.urdf')!r})\n"
         )
         lines = source.splitlines(keepends=True)
         for index, line in enumerate(lines):

@@ -19,8 +19,8 @@ from isaacsim.core.utils.rotations import (
 from isaacsim.core.simulation_manager import SimulationManager
 from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdPhysics
 
-from S5.core.state import state
-from S5.core.state import (
+from aura_isaac_bridge.core.state import state
+from aura_isaac_bridge.core.state import (
     DACH_ARM_SIDE,
     DACH_OPEN_GRIPPER_CENTER_LOCAL_OFFSET,
     DACH_JAW_COLLISION_LOCAL_BOUNDS,
@@ -35,11 +35,11 @@ from S5.core.state import (
     ACTION_WAYPOINT_LIMIT, CARTESIAN_WAYPOINT_SPACING,
     DUAL_ARM_MIN_TCP_SEPARATION,
 )
-from S5.core.physics import step_app
-from S5.robot.dach_tron2a import LEFT_ARM_HOME, RIGHT_ARM_HOME
-from S5.robot.motion_planner import minimum_jerk, SparseKeyposeDiffuser, DiffusionConfig
-from S5.core.perception import get_bbox_center, get_sim_pose, quat_rotate
-from S5.utils.path_visualization import render_joint_path
+from aura_isaac_bridge.core.physics import step_app
+from aura_isaac_bridge.robot.dach_tron2a import LEFT_ARM_HOME, RIGHT_ARM_HOME
+from aura_isaac_bridge.robot.motion_planner import minimum_jerk, SparseKeyposeDiffuser, DiffusionConfig
+from aura_isaac_bridge.core.perception import get_bbox_center, get_sim_pose, quat_rotate
+from aura_isaac_bridge.utils.path_visualization import render_joint_path
 
 
 def quat_multiply(q1, q2):
@@ -440,7 +440,7 @@ def attach_simulated_object(target_prim, prim_path):
     rigid_body.CreateAngularVelocityAttr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
     runtime_rigid_prim = SingleRigidPrim(
         prim_path=prim_path,
-        name="s5_attached_object",
+        name="aura_attached_object",
         reset_xform_properties=False,
     )
     runtime_rigid_prim.initialize(
@@ -467,7 +467,7 @@ def attach_simulated_object(target_prim, prim_path):
         quat_multiply(quat_inverse(ee_quat), object_quat)
     )
 
-    joint_path = "/World/S5BananaGraspFixedJoint"
+    joint_path = "/World/AuraBananaGraspFixedJoint"
     if get_current_stage().GetPrimAtPath(joint_path).IsValid():
         delete_prim(joint_path)
     active_side = getattr(state, "active_arm_side", None) or getattr(
@@ -617,7 +617,7 @@ def ensure_robot_control_ready(max_attempts=30):
             print("✅ DACH 双臂/Lula IK 控制状态已恢复")
             return
     raise RuntimeError(
-        "DACH 双臂关节状态仍不完整，请确认时间线正在播放并重新加载 S5 Isaac 执行器。"
+        "DACH 双臂关节状态仍不完整，请确认时间线正在播放并重新加载 AuraVLA Isaac 执行器。"
     )
 
 
@@ -835,12 +835,12 @@ def _execute_dual_joint_trajectory(
     state._task_motion_started = True
 
     clearance_abort_threshold = (
-        float(os.environ.get("S5_MIN_GRIPPER_TABLE_CLEARANCE", "0.012"))
-        + float(os.environ.get("S5_TABLE_CLEARANCE_ABORT_MARGIN", "0.006"))
+        float(os.environ.get("AURA_MIN_GRIPPER_TABLE_CLEARANCE", "0.012"))
+        + float(os.environ.get("AURA_TABLE_CLEARANCE_ABORT_MARGIN", "0.006"))
     )
     clearance_violation_streak = 0
     clearance_violation_tolerance = int(
-        os.environ.get("S5_CLEARANCE_VIOLATION_TOLERANCE_FRAMES", "3")
+        os.environ.get("AURA_CLEARANCE_VIOLATION_TOLERANCE_FRAMES", "3")
     )
     minimum_table_clearance = float("inf")
     last_safe_left = left_start.copy()
@@ -1541,14 +1541,14 @@ def move_ee_collision_aware_approach(
         f"closing_alignment={closing_alignment:.3f}"
     )
     tilt_limit = (
-        np.radians(float(os.environ.get("S5_MAX_GRASP_APPROACH_TILT_DEG", "60.0")))
+        np.radians(float(os.environ.get("AURA_MAX_GRASP_APPROACH_TILT_DEG", "60.0")))
         if maximum_approach_tilt_rad is None
         else float(maximum_approach_tilt_rad)
     )
     return {
         "success": bool(
             distance <= tolerance
-            and clearance >= float(os.environ.get("S5_MIN_GRIPPER_TABLE_CLEARANCE", "0.012"))
+            and clearance >= float(os.environ.get("AURA_MIN_GRIPPER_TABLE_CLEARANCE", "0.012"))
             # Lula/PhysX feedback around an exact limit can differ by a few
             # thousandths of a degree (for example 45.006° for a 45° target).
             and actual_tilt <= tilt_limit + math.radians(0.25)
@@ -1667,8 +1667,8 @@ def close_gripper_slowly(
         if monitor_table_clearance:
             clearance = float(get_gripper_table_clearance())
             abort_threshold = (
-                float(os.environ.get("S5_MIN_GRIPPER_TABLE_CLEARANCE", "0.012"))
-                + float(os.environ.get("S5_TABLE_CLEARANCE_ABORT_MARGIN", "0.006"))
+                float(os.environ.get("AURA_MIN_GRIPPER_TABLE_CLEARANCE", "0.012"))
+                + float(os.environ.get("AURA_TABLE_CLEARANCE_ABORT_MARGIN", "0.006"))
             )
             if clearance < abort_threshold:
                 state.dach_arm.gripper.set_joint_positions(start_positions)
@@ -1755,8 +1755,8 @@ def close_gripper_slowly(
         if monitor_table_clearance:
             clearance = float(get_gripper_table_clearance())
             abort_threshold = (
-                float(os.environ.get("S5_MIN_GRIPPER_TABLE_CLEARANCE", "0.012"))
-                + float(os.environ.get("S5_TABLE_CLEARANCE_ABORT_MARGIN", "0.006"))
+                float(os.environ.get("AURA_MIN_GRIPPER_TABLE_CLEARANCE", "0.012"))
+                + float(os.environ.get("AURA_TABLE_CLEARANCE_ABORT_MARGIN", "0.006"))
             )
             if clearance < abort_threshold:
                 state.dach_arm.gripper.set_joint_positions(start_positions)

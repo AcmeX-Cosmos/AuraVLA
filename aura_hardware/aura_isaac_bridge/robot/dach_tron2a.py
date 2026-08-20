@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 
 import numpy as np
 from isaacsim.core.prims import SingleArticulation
@@ -30,9 +31,17 @@ LEFT_ARM_HOME = np.array(
 RIGHT_ARM_HOME = np.array(
     [0.8477, -0.124, 0.1424, -2.3204, 0.0, 0.0, 0.0], dtype=float
 )
-GRIPPER_OPEN = np.array([0.0375, 0.0375], dtype=float)
+_ALLOW_OVERSIZED_CAN_GRASP = os.environ.get(
+    "AURA_ALLOW_OVERSIZED_CAN_GRASP", "false"
+).strip().lower() in {"1", "true", "yes", "on"}
+# The larger opening is an Isaac-only demonstration mode. It must be enabled
+# explicitly because it exceeds the calibrated physical gripper envelope.
+GRIPPER_OPEN = np.array(
+    [0.065, 0.065] if _ALLOW_OVERSIZED_CAN_GRASP else [0.0375, 0.0375],
+    dtype=float,
+)
 GRIPPER_CLOSED = np.array([0.0, 0.0], dtype=float)
-GRIPPER_LIMITS = (-0.0045, 0.0375)
+GRIPPER_LIMITS = (-0.0045, float(GRIPPER_OPEN[0]))
 
 
 def _arm_spec(side: str) -> dict:

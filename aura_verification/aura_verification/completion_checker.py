@@ -2,7 +2,7 @@
 Completion Checker
 
 Verifies task completion using geometric validation.
-Adapted from S5 implementation.
+AuraVLA completion verification implementation.
 """
 
 from typing import Dict, Any

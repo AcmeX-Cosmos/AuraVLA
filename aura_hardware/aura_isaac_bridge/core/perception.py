@@ -1,4 +1,4 @@
-"""S5 感知模块：BBox、PCA、网格质心、SAM 分割、GraspNet 推理、相机。"""
+"""AuraVLA 感知模块：BBox、PCA、网格质心、SAM、GraspNet 与相机。"""
 
 from __future__ import annotations
 
@@ -25,9 +25,9 @@ from isaacsim.core.utils.rotations import (
 )
 from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics
 
-from S5.core.state import state
-from S5.core.state import (
-    PROJECT_ROOT, ISAAC_SIM_ROOT, ISAAC_SITE_PACKAGES, STUDY_DIR, S5_DIR, SECTION3_DIR,
+from aura_isaac_bridge.core.state import state
+from aura_isaac_bridge.core.state import (
+    PROJECT_ROOT, ISAAC_SIM_ROOT, ISAAC_SITE_PACKAGES, STUDY_DIR, AURA_DIR, SECTION3_DIR,
     DEFAULT_PROJECT_ROOT, DEFAULT_ISAAC_SIM_ROOT, DEFAULT_ISAAC_SITE_PACKAGES,
     GRASPNET_DIR, GRASPNET_CHECKPOINT_PATH, SAM_MODEL_PATH,
     DEFAULT_GRASPNET_DIR, DEFAULT_SAM_MODEL_PATH,
@@ -37,7 +37,7 @@ from S5.core.state import (
     GRASPNET_CALIBRATION_ENABLED, GRASPNET_CAMERA_OFFSET,
     GRASPNET_CALIBRATION_MAX_CORRECTION,
 )
-from S5.core.physics import step_app
+from aura_isaac_bridge.core.physics import step_app
 
 def get_bbox_center(stage, prim_path):
     prim = stage.GetPrimAtPath(prim_path)

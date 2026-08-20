@@ -4,7 +4,7 @@ Main Orchestrator
 Coordinates the complete closed-loop control:
 Perception → Planning → Execution → Verification → Replan
 
-Adapted from S5 orchestrator.
+AuraVLA closed-loop orchestration implementation.
 """
 
 from typing import Dict, Any, Optional

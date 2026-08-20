@@ -1,4 +1,4 @@
-"""S5 物理仿真模块：SimulationContext、碰撞体、接触物理、RigidBodyAPI。"""
+"""AuraVLA 物理仿真模块：SimulationContext、碰撞体与接触物理。"""
 
 from __future__ import annotations
 
@@ -13,8 +13,8 @@ from isaacsim.core.utils.prims import delete_prim
 from isaacsim.core.simulation_manager import SimulationManager
 from pxr import PhysxSchema, Usd, UsdGeom, UsdPhysics, UsdShade
 
-from S5.core.state import state
-from S5.core.state import (
+from aura_isaac_bridge.core.state import state
+from aura_isaac_bridge.core.state import (
     BANANA_STATIC_FRICTION, BANANA_DYNAMIC_FRICTION,
     GRIPPER_STATIC_FRICTION, GRIPPER_DYNAMIC_FRICTION,
     PHYSX_CONTACT_OFFSET, PHYSX_REST_OFFSET,
@@ -30,7 +30,7 @@ from S5.core.state import (
 )
 
 
-STEP_TIMING_WINDOW = max(int(os.environ.get("S5_STEP_TIMING_WINDOW", "120")), 0)
+STEP_TIMING_WINDOW = max(int(os.environ.get("AURA_STEP_TIMING_WINDOW", "120")), 0)
 _step_timing = {"count": 0, "wall": 0.0, "worst": 0.0}
 
 
@@ -277,7 +277,7 @@ def prepare_dach_finger_collision_instances(stage):
     print(f"✅ DACH 夹指碰撞实例已展开: {deinstanced}")
 
 
-def configure_dach_contact_physics(stage):
+def configure_dach_contact_physics(stage, *, active_arm=None, left_arm=None, right_arm=None):
     SimulationManager.enable_ccd(PHYSX_ENABLE_CCD)
     articulation_prim = stage.GetPrimAtPath("/World/DACH_TRON2A")
     articulation_api = (
@@ -294,7 +294,7 @@ def configure_dach_contact_physics(stage):
 
     finger_material = create_grasp_physics_material(
         stage,
-        "/World/S5FingerGripPhysicsMaterial",
+        "/World/AuraFingerGripPhysicsMaterial",
         GRIPPER_STATIC_FRICTION,
         GRIPPER_DYNAMIC_FRICTION,
     )
@@ -332,14 +332,19 @@ def configure_dach_contact_physics(stage):
             bind_grasp_physics_material(prim, finger_material)
             configured_colliders += 1
 
-    articulation_controller = state.dach_arm.articulation.get_articulation_controller()
+    active_arm = active_arm or state.dach_arm
+    left_arm = left_arm or state.dach_left
+    right_arm = right_arm or state.dach_right
+    if active_arm is None or left_arm is None or right_arm is None:
+        raise RuntimeError("DACH arm views must be initialized before contact physics")
+    articulation_controller = active_arm.articulation.get_articulation_controller()
     stiffnesses, dampings = articulation_controller.get_gains()
     max_efforts = articulation_controller.get_max_efforts()
     gripper_indices = np.unique(
         np.concatenate(
             (
-                state.dach_left._gripper_indices,
-                state.dach_right._gripper_indices,
+                left_arm._gripper_indices,
+                right_arm._gripper_indices,
             )
         )
     )
