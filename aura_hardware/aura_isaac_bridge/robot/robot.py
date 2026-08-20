@@ -550,7 +550,13 @@ if state.controller.rrt is not None:
             static=True,
         )
     )
-    state.planning_basket_obstacle_enabled = basket_added_right
+    # Lula enables an obstacle when it is added.  Preserve that state even if
+    # a hot-reloaded controller reports that the same proxy already exists;
+    # otherwise the first task retries enable_obstacle and raises
+    # ``Attempted to enable an already-enabled obstacle``.
+    state.planning_basket_obstacle_enabled = bool(
+        basket_added_right or basket_added_left
+    )
     if basket_added_right:
         print(
             "✅ DACH Lula RRT 已启用收纳箱碰撞障碍: "
@@ -605,13 +611,52 @@ state.right_finger = state.arm_fingers[DACH_ARM_SIDE]["right"]
 
 
 # ── 10. 启动 Camera Bridge 与 Task Bridge ─────────────────────────
-from S5.communication.camera_bridge import start_camera_bridge
-from S5.communication.task_bridge import start_task_bridge
+# Load AuraVLA bridges by file path. The VS Code Edition process can retain
+# Eva-Agent's S5.communication modules across injections, which would silently
+# write to /tmp/eva-agent-s5-control instead of AuraVLA's control directory.
+_aura_camera_bridge_path = _AURA_ISAAC_BRIDGE_DIR / "start_camera_bridge.py"
+_aura_task_bridge_path = (
+    _AURA_ISAAC_BRIDGE_DIR.parent.parent
+    / "aura_execution"
+    / "aura_execution"
+    / "task_bridge.py"
+)
+_aura_project_root = _AURA_ISAAC_BRIDGE_DIR.parent.parent
+for _aura_python_path in (
+    _aura_project_root / "aura_execution",
+    _aura_project_root / "aura_orchestration",
+    _aura_project_root / "aura_planning",
+):
+    if str(_aura_python_path) not in sys.path:
+        sys.path.insert(0, str(_aura_python_path))
+_camera_bridge_spec = importlib.util.spec_from_file_location(
+    "aura_vla_camera_bridge", _aura_camera_bridge_path
+)
+if _camera_bridge_spec is None or _camera_bridge_spec.loader is None:
+    raise RuntimeError(
+        f"Unable to load AuraVLA camera bridge: {_aura_camera_bridge_path}"
+    )
+_camera_bridge_module = importlib.util.module_from_spec(_camera_bridge_spec)
+sys.modules[_camera_bridge_spec.name] = _camera_bridge_module
+_camera_bridge_spec.loader.exec_module(_camera_bridge_module)
+start_camera_bridge = _camera_bridge_module.start_camera_bridge
+
+_task_bridge_spec = importlib.util.spec_from_file_location(
+    "aura_vla_task_bridge", _aura_task_bridge_path
+)
+if _task_bridge_spec is None or _task_bridge_spec.loader is None:
+    raise RuntimeError(
+        f"Unable to load AuraVLA task bridge: {_aura_task_bridge_path}"
+    )
+_task_bridge_module = importlib.util.module_from_spec(_task_bridge_spec)
+sys.modules[_task_bridge_spec.name] = _task_bridge_module
+_task_bridge_spec.loader.exec_module(_task_bridge_module)
+start_task_bridge = _task_bridge_module.start_task_bridge
 
 release_cuda_inference_cache()
 state.camera_bridge = start_camera_bridge(
-    state.grasp_camera,
     camera_prim_path=CAMERA_PRIM_PATH,
+    output_directory=os.environ.get("AURA_CAMERA_DIR", "/tmp/aura-vla-camera"),
 )
 print("✅ Camera Bridge 已启动")
 state.task_bridge = start_task_bridge(execute_pick_place_with_reset)
