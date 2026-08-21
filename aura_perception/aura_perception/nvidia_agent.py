@@ -140,7 +140,8 @@ class NvidiaConfig:
     frequency_penalty: float = 0.0
     presence_penalty: float = 0.0
     request_timeout_sec: float = 300.0
-    parallel_request_timeout_sec: float = 60.0
+    parallel_request_timeout_sec: float = 20.0
+    parallel_max_retries: int = 0
     max_retries: int = 2
     retry_backoff_sec: float = 1.0
     image_max_edge: int = 448
@@ -174,8 +175,9 @@ class NvidiaConfig:
             presence_penalty=float(nvidia.get("presence_penalty", 0.0)),
             request_timeout_sec=float(nvidia.get("request_timeout_sec", 300.0)),
             parallel_request_timeout_sec=float(
-                nvidia.get("parallel_request_timeout_sec", 60.0)
+                nvidia.get("parallel_request_timeout_sec", 20.0)
             ),
+            parallel_max_retries=int(nvidia.get("parallel_max_retries", 0)),
             max_retries=int(nvidia.get("max_retries", 2)),
             retry_backoff_sec=float(nvidia.get("retry_backoff_sec", 1.0)),
             image_max_edge=int(agent.get("image_max_edge", 448)),
@@ -420,6 +422,7 @@ class NvidiaBuildBackend:
                 api_key=api_key,
                 cancel_event=stop_event,
                 timeout_sec=self._config.parallel_request_timeout_sec,
+                max_retries=self._config.parallel_max_retries,
             ): index
             for index, api_key in enumerate(keys, start=1)
         }
@@ -488,10 +491,15 @@ class NvidiaBuildBackend:
         api_key: str | None = None,
         cancel_event: Event | None = None,
         timeout_sec: float | None = None,
+        max_retries: int | None = None,
     ) -> dict[str, Any]:
         url = f"{self._config.base_url.rstrip('/')}{endpoint}"
         result = None
-        for attempt in range(max(0, self._config.max_retries) + 1):
+        retry_limit = max(
+            0,
+            self._config.max_retries if max_retries is None else int(max_retries),
+        )
+        for attempt in range(retry_limit + 1):
             if cancel_event is not None and cancel_event.is_set():
                 raise NvidiaTransientError("request superseded by another API key")
             request = Request(
@@ -518,10 +526,10 @@ class NvidiaBuildBackend:
             except HTTPError as exc:
                 body = exc.read().decode("utf-8", errors="replace")
                 retryable = exc.code == 429 or 500 <= exc.code <= 599
-                if retryable and attempt < self._config.max_retries:
+                if retryable and attempt < retry_limit:
                     print(
                         f"nvidia> NVIDIA HTTP {exc.code}; retrying "
-                        f"{attempt + 1}/{self._config.max_retries}...",
+                        f"{attempt + 1}/{retry_limit}...",
                         flush=True,
                     )
                     retry_delay = self._config.retry_backoff_sec * (2**attempt)
@@ -543,10 +551,10 @@ class NvidiaBuildBackend:
                 ConnectionResetError,
                 TimeoutError,
             ) as exc:
-                if attempt < self._config.max_retries:
+                if attempt < retry_limit:
                     print(
                         f"nvidia> NVIDIA connection interrupted; retrying "
-                        f"{attempt + 1}/{self._config.max_retries}...",
+                        f"{attempt + 1}/{retry_limit}...",
                         flush=True,
                     )
                     retry_delay = self._config.retry_backoff_sec * (2**attempt)
@@ -680,8 +688,21 @@ class NvidiaVLAgent:
         if str(response.get("task", "")).strip().lower() == "conversation":
             response["doable"] = False
             response.setdefault("schema_version", "1.0")
+        return self._record_response(
+            instruction,
+            response,
+            clear_history=scene_inspection,
+        )
+
+    def _record_response(
+        self,
+        instruction: str,
+        response: Mapping[str, Any],
+        *,
+        clear_history: bool = False,
+    ) -> str:
         response_json = dumps_json(response)
-        if scene_inspection:
+        if clear_history:
             self._history.clear()
         self._history.extend(
             [
@@ -946,6 +967,7 @@ def main(argv: list[str] | None = None) -> int:
         presence_penalty=base_config.presence_penalty,
         request_timeout_sec=base_config.request_timeout_sec,
         parallel_request_timeout_sec=base_config.parallel_request_timeout_sec,
+        parallel_max_retries=base_config.parallel_max_retries,
         max_retries=base_config.max_retries,
         retry_backoff_sec=base_config.retry_backoff_sec,
         image_max_edge=args.image_max_edge,

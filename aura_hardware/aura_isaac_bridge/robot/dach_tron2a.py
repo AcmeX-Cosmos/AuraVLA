@@ -325,6 +325,7 @@ class DACHTron2AIKController:
     def plan_collision_free_cspace_path(
         self,
         target_joint_positions,
+        start_joint_positions=None,
     ) -> list[np.ndarray] | None:
         if self.rrt is None:
             return None
@@ -333,8 +334,10 @@ class DACHTron2AIKController:
             np.asarray(target_joint_positions, dtype=float)
         )
         self.rrt.update_world()
+        if start_joint_positions is None:
+            start_joint_positions = self.get_active_joint_positions()
         path = self.rrt.compute_path(
-            self.get_active_joint_positions(),
+            np.asarray(start_joint_positions, dtype=float),
             np.array([], dtype=float),
         )
         if path is None:

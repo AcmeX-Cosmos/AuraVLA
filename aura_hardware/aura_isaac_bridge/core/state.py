@@ -157,10 +157,10 @@ TRAJECTORY_SETTLE_FRAMES = max(int(os.environ.get("AURA_TRAJECTORY_SETTLE_FRAMES
 GRASP_APPROACH_MAX_JOINT_STEP = max(float(os.environ.get("AURA_GRASP_APPROACH_MAX_JOINT_STEP", "0.018")), 0.001)
 GRASP_APPROACH_MIN_FRAMES = max(int(os.environ.get("AURA_GRASP_APPROACH_MIN_FRAMES", "24")), 4)
 GRASP_LIFT_MAX_JOINT_STEP = max(
-    float(os.environ.get("AURA_GRASP_LIFT_MAX_JOINT_STEP", "0.008")), 0.001
+    float(os.environ.get("AURA_GRASP_LIFT_MAX_JOINT_STEP", "0.03")), 0.001
 )
 GRASP_LIFT_MIN_FRAMES = max(
-    int(os.environ.get("AURA_GRASP_LIFT_MIN_FRAMES", "150")), 30
+    int(os.environ.get("AURA_GRASP_LIFT_MIN_FRAMES", "20")), 20
 )
 ACTION_WAYPOINT_LIMIT = max(int(os.environ.get("AURA_ACTION_WAYPOINT_LIMIT", "3")), 1)
 CARTESIAN_WAYPOINT_SPACING = max(float(os.environ.get("AURA_CARTESIAN_WAYPOINT_SPACING", "0.04")), 0.01)

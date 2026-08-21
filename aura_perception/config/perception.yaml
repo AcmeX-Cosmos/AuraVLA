@@ -7,6 +7,8 @@ nvidia:
   temperature: 0.2
   top_p: 0.9
   request_timeout_sec: 300.0
+  parallel_request_timeout_sec: 20.0
+  parallel_max_retries: 0
   max_retries: 2
 
 # Agent Configuration

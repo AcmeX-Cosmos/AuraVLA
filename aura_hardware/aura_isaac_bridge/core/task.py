@@ -73,7 +73,6 @@ from aura_isaac_bridge.core.motion import (
     ensure_robot_control_ready,
     get_rmp_ee_position,
     move_ee_to,
-    move_ee_waypoints,
     move_ee_smooth,
     plan_ee_waypoints,
     plan_collision_free_keyposes,
@@ -571,6 +570,46 @@ def execute_pick_place(object_name, target_name):
     ensure_pickable_object(get_current_stage(), object_prim_path)
     state.dach_arm.gripper.set_joint_positions(gripper_open_target)
     step_app(10)
+
+    # Reject geometrically impossible grasps while the arm is still at its
+    # safe starting pose. The later live-axis check remains the final guard.
+    _, object_short_axis = get_mesh_horizontal_principal_axes(
+        get_current_stage(),
+        object_prim_path,
+    )
+    minimum_closing_axis = np.array(
+        [object_short_axis[0], object_short_axis[1], 0.0],
+        dtype=float,
+    )
+    _, _, minimum_object_width = get_mesh_extent_along_axis(
+        get_current_stage(),
+        object_prim_path,
+        minimum_closing_axis,
+    )
+    gripper_opening_width = float(get_gripper_inner_opening_width())
+    aperture_margin = 0.004 if canonical_object_name == "banana" else 0.0005
+    required_opening_width = float(minimum_object_width + aperture_margin)
+    print(
+        "📏 运动前最小抓取宽度校验: "
+        f"jaw_gap={gripper_opening_width:.4f} m, "
+        f"minimum_object_width={minimum_object_width:.4f} m, "
+        f"required={required_opening_width:.4f} m"
+    )
+    if required_opening_width > gripper_opening_width:
+        message = "object is wider than the physical gripper opening"
+        return {
+            "success": False,
+            "message": message,
+            "object_name": str(object_name),
+            "target_name": str(target_name),
+            "physical_constraint": {
+                "gripper_opening_m": gripper_opening_width,
+                "object_width_on_closing_axis_m": float(minimum_object_width),
+                "required_opening_m": required_opening_width,
+                "safety_margin_m": aperture_margin,
+                "checked_before_motion": True,
+            },
+        }
 
     top_down_orientation = get_top_down_grasp_orientation(object_name, target_prim)
     gripper_close_target = get_gripper_close_target(object_name)
@@ -1691,17 +1730,27 @@ def execute_pick_place(object_name, target_name):
         hold_ee_target(grasp_position, grasp_motion_orientation)
         step_app()
 
+    # Build the lift from the settled live TCP, not the pre-contact target.
+    # Twenty fixed-orientation Cartesian points constrain the TCP to one
+    # vertical line; sparse joint interpolation can otherwise bow sideways
+    # close to the table even when its endpoints share the same XY.
+    lift_start_position = get_rmp_ee_position().copy()
+    lift_position = lift_start_position + np.array(
+        [0.0, 0.0, TRANSPORT_LIFT_HEIGHT],
+        dtype=float,
+    )
     lift_ok = move_ee_smooth(
         "lift",
-        grasp_position,
+        lift_start_position,
         lift_position,
-        segments=3,
+        segments=GRASP_LIFT_MIN_FRAMES,
         max_steps_per_segment=50,
         tolerance=0.065,
         orientation=transport_orientation,
         gripper_positions=gripper_close_target,
         max_joint_step_rad=GRASP_LIFT_MAX_JOINT_STEP,
         minimum_frames=GRASP_LIFT_MIN_FRAMES,
+        cartesian_waypoint_limit=GRASP_LIFT_MIN_FRAMES,
     )
     lifted_object_position, _, _ = get_sim_pose(target_prim)
     lifted_gripper_position = get_rmp_ee_position().copy()
@@ -1756,6 +1805,41 @@ def execute_pick_place(object_name, target_name):
         }
         return failure_result
     base_carry_height = max(lift_position[2], place_hover_position[2])
+    _, carried_bbox_min, _ = get_current_bbox_center(
+        get_current_stage(),
+        target_prim,
+        object_prim_path,
+    )
+    target_prim_path = resolve_scene_prim_path(target_name)
+    _, _, target_bbox_max = get_bbox_center(
+        get_current_stage(),
+        target_prim_path,
+    )
+    payload_drop_below_tcp = max(
+        float(lifted_gripper_position[2] - carried_bbox_min[2]),
+        0.0,
+    )
+    payload_carry_margin = max(BASKET_PLANNING_MARGIN, 0.02)
+    payload_safe_tcp_z = (
+        float(target_bbox_max[2])
+        + payload_drop_below_tcp
+        + payload_carry_margin
+    )
+    base_carry_height = max(base_carry_height, payload_safe_tcp_z)
+    # Enter the placement corridor only from directly above the basket. The
+    # payload is not part of Lula's robot collision model, so its live lower
+    # extent must clear the basket before any horizontal crossing.
+    place_hover_position[2] = max(
+        float(place_hover_position[2]),
+        payload_safe_tcp_z,
+    )
+    print(
+        "📦 负载包络安全高度: "
+        f"payload_bottom={carried_bbox_min[2]:.4f} m, "
+        f"tcp={lifted_gripper_position[2]:.4f} m, "
+        f"basket_top={target_bbox_max[2]:.4f} m, "
+        f"required_tcp_z={payload_safe_tcp_z:.4f} m"
+    )
     clearance_candidates = []
     for clearance in (
         0.0,
@@ -1774,51 +1858,12 @@ def execute_pick_place(object_name, target_name):
     carry_clearance_used = None
     carry_planned_path = None
     carry_transport_orientation = transport_orientation
-    carry_path_strategy = "cartesian_fixed_orientation"
-    # Carry directly at the already reached lift height.  The old main route
-    # added a redundant 5 cm up/down detour before every horizontal transport.
-    # Extra height is now reserved for the collision-planning fallback below.
-    direct_clearance = 0.0
-    direct_apex_z = base_carry_height + direct_clearance
-    direct_source_clear = np.array(
-        [lift_position[0], lift_position[1], direct_apex_z], dtype=float
-    )
-    direct_target_clear = np.array(
-        [place_hover_position[0], place_hover_position[1], direct_apex_z],
-        dtype=float,
-    )
-    direct_route = []
-    previous_point = lift_position
-    for candidate_point in (
-        direct_source_clear,
-        direct_target_clear,
-        place_hover_position,
-    ):
-        if np.linalg.norm(candidate_point - previous_point) <= 1e-4:
-            continue
-        direct_route.append(candidate_point)
-        previous_point = candidate_point
-    print(
-        "🧭 主运输直达路径: "
-        f"keyposes={len(direct_route) + 1}, "
-        f"extra_clearance={direct_clearance:.3f} m"
-    )
-    carry_ok = move_ee_waypoints(
-        "carry_cartesian_fixed_orientation",
-        direct_route,
-        tolerance=0.08,
-        orientation=transport_orientation,
-        gripper_positions=gripper_close_target,
-        max_joint_step_rad=0.016,
-        minimum_frames=30,
-        max_spacing_m=CARRY_CARTESIAN_WAYPOINT_SPACING,
-    )
-    if carry_ok:
-        carry_clearance_used = direct_clearance
-        carry_transport_orientation = transport_orientation
+    carry_path_strategy = "rrt_keypose"
+    carry_planning_attempts = []
+    # Every transport candidate is validated against the live table and
+    # basket obstacles before execution. Cartesian IK alone proves only
+    # reachability and must not be used as a collision-planning substitute.
     for clearance in clearance_candidates:
-        if carry_ok:
-            break
         apex_z_height = base_carry_height + clearance
         source_clear_position = np.array(
             [lift_position[0], lift_position[1], apex_z_height],
@@ -1834,7 +1879,6 @@ def execute_pick_place(object_name, target_name):
         for candidate_point in (
             source_clear_position,
             target_clear_position,
-            place_hover_position,
         ):
             if np.linalg.norm(candidate_point - previous_point) <= 1e-4:
                 continue
@@ -1844,10 +1888,23 @@ def execute_pick_place(object_name, target_name):
             fallback_keyposes,
             orientation=transport_orientation,
         )
+        carry_planning_attempts.append(
+            {
+                "extra_clearance_m": clearance,
+                "keyposes": [point.tolist() for point in fallback_keyposes],
+                "segments": list(
+                    getattr(
+                        state,
+                        "last_collision_free_keypose_diagnostics",
+                        [],
+                    )
+                ),
+                "success": planned_path is not None,
+            }
+        )
         if planned_path is not None:
             carry_clearance_used = clearance
             carry_planned_path = planned_path
-            carry_path_strategy = "rrt_keypose_fallback"
             break
     if carry_planned_path is not None:
         (
@@ -1866,34 +1923,54 @@ def execute_pick_place(object_name, target_name):
             carry_joint_targets,
             gripper_positions=gripper_close_target,
         )
+        carry_terminal_position = np.asarray(carry_points[-1], dtype=float)
         carry_error = float(
-            np.linalg.norm(get_rmp_ee_position() - place_hover_position)
+            np.linalg.norm(get_rmp_ee_position() - carry_terminal_position)
         )
         carry_ok = carry_error <= 0.08
     if not carry_ok:
         abort_position = get_rmp_ee_position()
-        open_gripper_slowly(
+        returned_to_source = move_ee_smooth(
+            "carry_abort_vertical_return",
             abort_position,
-            orientation=grasp_motion_orientation,
-            frames=20,
-            target_open=gripper_open_target,
-        )
-        abort_retreat_position = abort_position + np.array([0.0, 0.0, 0.15])
-        move_ee_smooth(
-            "carry_abort_retreat",
-            abort_position,
-            abort_retreat_position,
-            segments=3,
+            lift_start_position,
+            segments=GRASP_LIFT_MIN_FRAMES,
             tolerance=0.05,
-            orientation=grasp_motion_orientation,
-            gripper_positions=gripper_open_target,
+            orientation=transport_orientation,
+            gripper_positions=gripper_close_target,
+            monitor_table_clearance=True,
+            max_joint_step_rad=GRASP_LIFT_MAX_JOINT_STEP,
+            minimum_frames=GRASP_LIFT_MIN_FRAMES,
+            cartesian_waypoint_limit=GRASP_LIFT_MIN_FRAMES,
         )
+        if returned_to_source:
+            open_gripper_slowly(
+                lift_start_position,
+                orientation=transport_orientation,
+                frames=20,
+                target_open=gripper_open_target,
+            )
+            abort_retreat_position = lift_start_position + np.array(
+                [0.0, 0.0, 0.15]
+            )
+            move_ee_smooth(
+                "carry_abort_retreat",
+                lift_start_position,
+                abort_retreat_position,
+                segments=3,
+                tolerance=0.05,
+                orientation=transport_orientation,
+                gripper_positions=gripper_open_target,
+            )
         move_robot_home(frames=90)
         return {
             "success": False,
             "message": "collision-clearance carry path is unreachable",
             "object_name": str(object_name),
             "target_name": str(target_name),
+            "returned_to_source_before_release": returned_to_source,
+            "payload_safe_tcp_z_m": payload_safe_tcp_z,
+            "carry_planning_attempts": carry_planning_attempts,
         }
     placing_in_basket = canonical_target_name == "basket"
     if placing_in_basket and not set_planning_basket_obstacle_enabled(False):
@@ -1903,6 +1980,29 @@ def execute_pick_place(object_name, target_name):
             "object_name": str(object_name),
             "target_name": str(target_name),
         }
+    if placing_in_basket:
+        corridor_entry_ok = move_ee_smooth(
+            "basket_vertical_corridor_entry",
+            get_rmp_ee_position(),
+            place_hover_position,
+            segments=10,
+            max_steps_per_segment=45,
+            tolerance=0.025,
+            orientation=transport_orientation,
+            gripper_positions=gripper_close_target,
+            monitor_table_clearance=True,
+            max_joint_step_rad=0.016,
+            minimum_frames=30,
+            cartesian_waypoint_limit=10,
+        )
+        if not corridor_entry_ok:
+            set_planning_basket_obstacle_enabled(True)
+            return {
+                "success": False,
+                "message": "failed to enter basket vertical placement corridor",
+                "object_name": str(object_name),
+                "target_name": str(target_name),
+            }
     if placing_in_basket and state.planning_table_surface_z is not None:
         current_tcp_z = float(get_rmp_ee_position()[2])
         current_clearance = float(get_gripper_table_clearance())
