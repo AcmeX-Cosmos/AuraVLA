@@ -233,6 +233,92 @@ def get_sim_pose(single_prim):
         position, orientation = single_prim.get_world_pose()
         return np.array(position, dtype=float), np.array(orientation, dtype=float), "usd"
 
+
+def _get_usd_to_sim_geometry_transform(target_prim):
+    """Return the rigid transform from authored USD geometry to live Fabric."""
+    sim_positions, sim_orientations = target_prim._prim_view.get_world_poses(
+        usd=False
+    )
+    usd_positions, usd_orientations = target_prim._prim_view.get_world_poses(
+        usd=True
+    )
+    sim_position = np.asarray(sim_positions[0], dtype=float)
+    usd_position = np.asarray(usd_positions[0], dtype=float)
+    sim_rotation = quat_to_rot_matrix(
+        np.asarray(sim_orientations[0], dtype=float)
+    )
+    usd_rotation = quat_to_rot_matrix(
+        np.asarray(usd_orientations[0], dtype=float)
+    )
+    return sim_position, usd_position, sim_rotation, usd_rotation
+
+
+def transform_usd_world_points_to_sim(target_prim, points):
+    points = np.asarray(points, dtype=float)
+    original_shape = points.shape
+    points = points.reshape(-1, 3)
+    sim_position, usd_position, sim_rotation, usd_rotation = (
+        _get_usd_to_sim_geometry_transform(target_prim)
+    )
+    local_points = (points - usd_position) @ usd_rotation
+    transformed = local_points @ sim_rotation.T + sim_position
+    return transformed.reshape(original_shape)
+
+
+def transform_sim_world_points_to_usd(target_prim, points):
+    points = np.asarray(points, dtype=float)
+    original_shape = points.shape
+    points = points.reshape(-1, 3)
+    sim_position, usd_position, sim_rotation, usd_rotation = (
+        _get_usd_to_sim_geometry_transform(target_prim)
+    )
+    local_points = (points - sim_position) @ sim_rotation
+    transformed = local_points @ usd_rotation.T + usd_position
+    return transformed.reshape(original_shape)
+
+
+def get_current_bbox_center(stage, target_prim, prim_path=None):
+    prim_path = str(prim_path or target_prim.prim_path)
+    _, bbox_min, bbox_max = get_bbox_center(stage, prim_path)
+    usd_corners = np.asarray(
+        [
+            [x, y, z]
+            for x in (bbox_min[0], bbox_max[0])
+            for y in (bbox_min[1], bbox_max[1])
+            for z in (bbox_min[2], bbox_max[2])
+        ],
+        dtype=float,
+    )
+    sim_corners = transform_usd_world_points_to_sim(target_prim, usd_corners)
+    sim_min = np.min(sim_corners, axis=0)
+    sim_max = np.max(sim_corners, axis=0)
+    return (sim_min + sim_max) * 0.5, sim_min, sim_max
+
+
+def get_current_mesh_horizontal_cross_section_center(
+    stage,
+    target_prim,
+    source_xy,
+    prim_path=None,
+    half_width=0.018,
+):
+    prim_path = str(prim_path or target_prim.prim_path)
+    sim_position, _, _, _ = _get_usd_to_sim_geometry_transform(target_prim)
+    sim_source = np.asarray(
+        [source_xy[0], source_xy[1], sim_position[2]], dtype=float
+    )
+    usd_source = transform_sim_world_points_to_usd(target_prim, sim_source)
+    usd_center_xy = get_mesh_horizontal_cross_section_center(
+        stage,
+        prim_path,
+        usd_source[:2],
+        half_width=half_width,
+    )
+    usd_center = np.asarray(
+        [usd_center_xy[0], usd_center_xy[1], usd_source[2]], dtype=float
+    )
+    return transform_usd_world_points_to_sim(target_prim, usd_center)[:2]
+
 def show_red_grasp_point(stage, position, radius=0.015):
     marker_path = "/World/debug_grasp_point"
     if stage.GetPrimAtPath(marker_path).IsValid():
@@ -336,15 +422,7 @@ def show_camera_preview(rgb_data, prompt_points=None, prompt_labels=None):
     print("📷 相机预览已打开，继续执行 SAM、GraspNet 和机械臂夹取。")
 
 def get_current_object_center(stage, target_prim, prim_path=None):
-    prim_path = str(prim_path or target_prim.prim_path)
-    usd_origin, usd_orientation = target_prim.get_world_pose()
-    sim_origin, sim_orientation, _ = get_sim_pose(target_prim)
-    bbox_center, _, _ = get_bbox_center(stage, prim_path)
-    local_bbox_offset = quat_rotate(
-        np.asarray(usd_orientation, dtype=float) * np.array([1.0, -1.0, -1.0, -1.0]),
-        bbox_center - np.asarray(usd_origin, dtype=float),
-    )
-    return sim_origin + quat_rotate(sim_orientation, local_bbox_offset)
+    return get_current_bbox_center(stage, target_prim, prim_path)[0]
 
 def create_sam_prompt_points(stage, camera, target_prim, rgb_data, prim_path=None):
     image_height, image_width = rgb_data.shape[:2]

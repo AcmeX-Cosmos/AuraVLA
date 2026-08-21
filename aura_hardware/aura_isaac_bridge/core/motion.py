@@ -8,7 +8,6 @@ import time
 from collections import deque
 
 import numpy as np
-from isaacsim.core.prims import SingleRigidPrim
 from isaacsim.core.utils.stage import get_current_stage
 from isaacsim.core.utils.prims import delete_prim
 from isaacsim.core.utils.rotations import (
@@ -30,6 +29,7 @@ from aura_isaac_bridge.core.state import (
     GRIPPER_CONTACT_PRELOAD_RESIDUAL, GRIPPER_CONTACT_HOLD_PRELOAD,
     GRIPPER_CONTACT_SETTLE_FRAMES, GRIPPER_PRELOAD_CONFIRM_FRAMES,
     MIN_GRIPPER_TABLE_CLEARANCE, TABLE_CLEARANCE_ABORT_MARGIN,
+    PHYSX_CONTACT_OFFSET, PHYSX_REST_OFFSET,
     TRAJECTORY_MAX_JOINT_STEP, TRAJECTORY_MIN_FRAMES, TRAJECTORY_SETTLE_FRAMES,
     GRASP_APPROACH_MAX_JOINT_STEP, GRASP_APPROACH_MIN_FRAMES,
     ACTION_WAYPOINT_LIMIT, CARTESIAN_WAYPOINT_SPACING,
@@ -38,7 +38,12 @@ from aura_isaac_bridge.core.state import (
 from aura_isaac_bridge.core.physics import step_app
 from aura_isaac_bridge.robot.dach_tron2a import LEFT_ARM_HOME, RIGHT_ARM_HOME
 from aura_isaac_bridge.robot.motion_planner import minimum_jerk, SparseKeyposeDiffuser, DiffusionConfig
-from aura_isaac_bridge.core.perception import get_bbox_center, get_sim_pose, quat_rotate
+from aura_isaac_bridge.core.perception import (
+    get_bbox_center,
+    get_current_bbox_center,
+    get_sim_pose,
+    quat_rotate,
+)
 from aura_isaac_bridge.utils.path_visualization import render_joint_path
 
 
@@ -117,7 +122,7 @@ def _max_path_orientation_error(joint_targets, desired_orientation):
     return max_error
 
 
-def get_object_gripper_containment(prim_path):
+def get_object_gripper_containment(prim_path, *, target_prim=None):
     """校验物体几何中心是否位于两片夹指的共同工作空间。
 
     Do not use the arithmetic mean of mesh vertices here.  The MasterChef
@@ -127,7 +132,12 @@ def get_object_gripper_containment(prim_path):
     the world bounding-box center; using the same geometric reference keeps
     the strict containment check aligned with the grasp target.
     """
-    object_center, _, _ = get_bbox_center(get_current_stage(), prim_path)
+    if target_prim is None:
+        object_center, _, _ = get_bbox_center(get_current_stage(), prim_path)
+    else:
+        object_center, _, _ = get_current_bbox_center(
+            get_current_stage(), target_prim, prim_path
+        )
     left_corners = get_finger_collision_world_corners(state.left_finger, "left")
     right_corners = get_finger_collision_world_corners(state.right_finger, "right")
     left_center = np.mean(left_corners, axis=0)
@@ -322,6 +332,20 @@ def get_gripper_table_clearance():
     return min(finger_bottoms) - state.planning_table_surface_z
 
 
+def get_gripper_table_contact_safe_clearance():
+    """Return a clearance outside the PhysX table contact generation range."""
+    configured_clearance = (
+        float(MIN_GRIPPER_TABLE_CLEARANCE)
+        + float(TABLE_CLEARANCE_ABORT_MARGIN)
+    )
+    physx_clearance = (
+        2.0 * max(float(PHYSX_CONTACT_OFFSET), 0.0)
+        + max(float(PHYSX_REST_OFFSET), 0.0)
+        + 0.001
+    )
+    return max(configured_clearance, physx_clearance)
+
+
 def get_gripper_closing_axis():
     left_position, _, _ = get_sim_pose(state.left_finger)
     right_position, _, _ = get_sim_pose(state.right_finger)
@@ -390,175 +414,16 @@ def get_tcp_target_for_gripper_center(target_center, orientation):
     return tcp_target
 
 
-def freeze_object_for_pregrasp(prim_path):
-    root_prim = get_current_stage().GetPrimAtPath(prim_path)
-    rigid_body = UsdPhysics.RigidBodyAPI(root_prim)
-    rigid_body.CreateVelocityAttr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
-    rigid_body.CreateAngularVelocityAttr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
-    rigid_body.CreateKinematicEnabledAttr().Set(True)
-    state._pregrasp_frozen_prim_path = str(prim_path)
-    step_app(2)
-    print(f"🧊 目标物体预抓取冻结（仍参与碰撞）: {prim_path}")
-
-
-def release_pregrasp_object():
-    if state._pregrasp_frozen_prim_path is None:
-        return
-    root_prim = get_current_stage().GetPrimAtPath(state._pregrasp_frozen_prim_path)
-    if root_prim.IsValid():
-        UsdPhysics.RigidBodyAPI(root_prim).CreateKinematicEnabledAttr().Set(False)
-    print(f"🧊➡️🔩 目标物体恢复动态刚体: {state._pregrasp_frozen_prim_path}")
-    state._pregrasp_frozen_prim_path = None
-
-
-def attach_simulated_object(target_prim, prim_path):
-    object_position, object_orientation = target_prim.get_world_pose()
-    position_sync_error, orientation_sync_error = get_fabric_usd_pose_error(
-        target_prim
-    )
-    if position_sync_error > 0.002 or orientation_sync_error > 0.02:
-        raise RuntimeError(
-            "banana Fabric/USD pose mismatch before attachment: "
-            f"position_error={position_sync_error:.4f} m, "
-            f"orientation_error={orientation_sync_error:.4f}"
-        )
-
-    containment = get_object_gripper_containment(prim_path)
-    if not containment["contained"]:
-        raise RuntimeError(
-            "banana is not physically between the gripper fingers: "
-            f"axial_error={containment['axial_error_m']:.4f} m "
-            f"(limit={containment['axial_limit_m']:.4f}), "
-            f"radial_error={containment['radial_error_m']:.4f} m "
-            f"(limit={containment['radial_limit_m']:.4f})"
-        )
-
-    root_prim = get_current_stage().GetPrimAtPath(prim_path)
-    rigid_body = UsdPhysics.RigidBodyAPI(root_prim)
-    rigid_body.CreateKinematicEnabledAttr().Set(False)
-    rigid_body.CreateVelocityAttr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
-    rigid_body.CreateAngularVelocityAttr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
-    runtime_rigid_prim = SingleRigidPrim(
-        prim_path=prim_path,
-        name="aura_attached_object",
-        reset_xform_properties=False,
-    )
-    runtime_rigid_prim.initialize(
-        physics_sim_view=SimulationManager.get_physics_sim_view()
-    )
-    runtime_rigid_prim._rigid_prim_view.set_velocities(
-        np.zeros((1, 6), dtype=np.float32)
-    )
-
-    # 获取当前TCP姿态（用于姿态变换）
-    ee_position, ee_rotation = state.controller.get_end_effector_pose()
-    ee_rotation = np.asarray(ee_rotation, dtype=float)
-    ee_orientation = rot_matrix_to_quat(ee_rotation)
-
-    # Use a PhysX joint instead of teleporting the object every frame. The
-    # visual mesh and collider remain children of the same dynamic rigid body.
-    gripper_center = get_gripper_collision_center()
-    object_quat = quat_normalize(object_orientation)
-    ee_quat = quat_normalize(ee_orientation)
-    local_offset = ee_rotation.T @ (
-        np.asarray(object_position, dtype=float) - np.asarray(ee_position, dtype=float)
-    )
-    relative_orientation = quat_normalize(
-        quat_multiply(quat_inverse(ee_quat), object_quat)
-    )
-
-    joint_path = "/World/AuraBananaGraspFixedJoint"
-    if get_current_stage().GetPrimAtPath(joint_path).IsValid():
-        delete_prim(joint_path)
-    active_side = getattr(state, "active_arm_side", None) or getattr(
-        state.dach_arm, "arm_side", DACH_ARM_SIDE
-    )
-    body0_path = f"/World/DACH_TRON2A/tcp_{'L' if active_side == 'left' else 'R'}_Link"
-    body0_prim = get_current_stage().GetPrimAtPath(body0_path)
-    if not body0_prim.IsValid() or not body0_prim.HasAPI(UsdPhysics.RigidBodyAPI):
-        raise RuntimeError(f"gripper rigid body is invalid: {body0_path}")
-
-    joint = UsdPhysics.FixedJoint.Define(get_current_stage(), joint_path)
-    joint.CreateBody0Rel().SetTargets([body0_prim.GetPath()])
-    joint.CreateBody1Rel().SetTargets([root_prim.GetPath()])
-    joint.CreateLocalPos0Attr().Set(
-        Gf.Vec3f(*[float(value) for value in local_offset])
-    )
-    joint.CreateLocalRot0Attr().Set(
-        Gf.Quatf(
-            float(relative_orientation[0]),
-            Gf.Vec3f(*[float(value) for value in relative_orientation[1:]]),
-        )
-    )
-    joint.CreateLocalPos1Attr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
-    joint.CreateLocalRot1Attr().Set(Gf.Quatf(1.0, Gf.Vec3f(0.0, 0.0, 0.0)))
-    joint.CreateCollisionEnabledAttr().Set(False)
-
-    state._simulated_attachment = {
-        "target_prim": target_prim,
-        "prim_path": prim_path,
-        "joint_path": joint_path,
-        "runtime_rigid_prim": runtime_rigid_prim,
-        "local_offset": local_offset,
-        "relative_orientation": relative_orientation,
-        "containment": containment,
-    }
-    # The object was deliberately kept kinematic throughout jaw closure.  The
-    # joint now owns it, so clear the pregrasp marker without another physics
-    # step between making the body dynamic and constraining it to the TCP.
-    state._pregrasp_frozen_prim_path = None
-    print(
-        f"🧲 已启用接触确认的 PhysX FixedJoint: {prim_path}, "
-        f"gripper_center={gripper_center}, local_offset={local_offset}, "
-        f"axial_error={containment['axial_error_m']:.4f}m, "
-        f"radial_error={containment['radial_error_m']:.4f}m"
-    )
-
-
-def update_simulated_attachment():
-    # PhysX owns the fixed-joint transform. Keeping this hook as a no-op avoids
-    # touching every trajectory caller and, critically, avoids per-frame pose
-    # writes that can desynchronise Fabric and USD rendering.
-    return
-
-
-def _zero_runtime_rigid_body_velocity(attachment):
-    runtime_rigid_prim = attachment.get("runtime_rigid_prim")
-    if runtime_rigid_prim is None:
-        return
-    runtime_rigid_prim._rigid_prim_view.set_velocities(
-        np.zeros((1, 6), dtype=np.float32)
-    )
-
-
-def detach_simulated_object(final_position=None, hold_kinematic=False):
-    if state._simulated_attachment is None:
-        return None
-    attachment = state._simulated_attachment
-    joint_path = attachment["joint_path"]
-    root_prim = get_current_stage().GetPrimAtPath(attachment["prim_path"])
-    rigid_body = UsdPhysics.RigidBodyAPI(root_prim)
-    rigid_body.CreateKinematicEnabledAttr().Set(bool(hold_kinematic))
-    if get_current_stage().GetPrimAtPath(joint_path).IsValid():
-        delete_prim(joint_path)
-    _zero_runtime_rigid_body_velocity(attachment)
-    rigid_body.CreateVelocityAttr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
-    rigid_body.CreateAngularVelocityAttr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
-    state._simulated_attachment = None
-    state_label = "等待夹爪张开" if hold_kinematic else "恢复自由刚体"
-    print(f"🧲 已解除 PhysX FixedJoint，物体{state_label}")
-    return attachment
-
-
-def release_detached_object(attachment):
-    if attachment is None:
-        return
-    root_prim = get_current_stage().GetPrimAtPath(attachment["prim_path"])
-    if not root_prim.IsValid():
-        return
-    UsdPhysics.RigidBodyAPI(root_prim).CreateKinematicEnabledAttr().Set(False)
-    _zero_runtime_rigid_body_velocity(attachment)
-    print("🧲 夹爪已张开，物体恢复自由刚体")
+def clear_legacy_grasp_joints():
+    """Remove attachment joints left by an older Aura/S5 runtime."""
+    stage = get_current_stage()
+    for joint_path in (
+        "/World/AuraBananaGraspFixedJoint",
+        "/World/S5BananaGraspFixedJoint",
+    ):
+        if stage.GetPrimAtPath(joint_path).IsValid():
+            delete_prim(joint_path)
+            print(f"🧹 已清理旧版抓取绑定: {joint_path}")
 
 
 def get_active_joint_positions():
@@ -899,7 +764,6 @@ def _execute_dual_joint_trajectory(
         state.dach_left.set_arm_joint_positions(left_joints)
         state.dach_arm.set_arm_joint_positions(right_joints)
         step_app()
-        update_simulated_attachment()
         verify_table_clearance(f"trajectory_frame_{frame_index}")
 
     left_final = trajectory.left_positions[-1]
@@ -917,7 +781,6 @@ def _execute_dual_joint_trajectory(
         state.dach_left.set_arm_joint_positions(left_final)
         state.dach_arm.set_arm_joint_positions(right_final)
         step_app()
-        update_simulated_attachment()
         verify_table_clearance(f"settle_frame_{settle_index + 1}")
         left_feedback = get_left_joint_positions()
         right_feedback = get_active_joint_positions()
@@ -1612,7 +1475,6 @@ def close_gripper_slowly(
     hold_target = target_close.copy()
     finger_count = len(start_positions)
     contact_streaks = np.zeros(finger_count, dtype=int)
-    contact_commands = np.full(finger_count, np.nan, dtype=float)
     contacted = np.zeros(finger_count, dtype=bool)
     previous_feedback = start_positions.copy()
     blocked_residuals = np.zeros_like(start_positions)
@@ -1623,11 +1485,11 @@ def close_gripper_slowly(
         closing_positions = start_positions + alpha * (
             target_close - start_positions
         )
-        commanded_positions = np.where(
-            contacted,
-            contact_commands,
-            closing_positions,
-        )
+        # The physical DACH linkage closes both jaws symmetrically. Do not
+        # freeze one simulated jaw on position lag; that creates an asymmetric
+        # gripper and was repeatedly stopping the left jaw at 26 mm with no
+        # measured contact force.
+        commanded_positions = closing_positions
         state.dach_arm.gripper.set_joint_positions(commanded_positions)
         hold_ee_target(hold_position, orientation)
         step_app()
@@ -1640,12 +1502,16 @@ def close_gripper_slowly(
         requested_steps = np.abs(
             commanded_positions - previous_feedback
         )
+        effort_feedback_available = np.isfinite(measured_efforts)
         contact_candidates = (
             i >= max(4, frames // 5)
         ) & (
             blocked_residuals >= GRIPPER_CONTACT_RESIDUAL
         ) & (
             feedback_steps <= np.maximum(requested_steps * 0.5, 0.00025)
+        ) & (
+            (~effort_feedback_available)
+            | (measured_efforts >= GRIPPER_CONTACT_FORCE_THRESHOLD)
         )
         contact_streaks = np.where(
             contacted,
@@ -1654,22 +1520,18 @@ def close_gripper_slowly(
         )
         newly_contacted = (~contacted) & (contact_streaks >= 3)
         if np.any(newly_contacted):
-            contact_commands[newly_contacted] = commanded_positions[newly_contacted]
             contacted[newly_contacted] = True
             print(
-                "✅ 独立夹指接触锁定: "
+                "✅ 夹指持续受力接触: "
                 f"step={i + 1}, contacted={contacted.tolist()}, "
-                f"contact_commands={contact_commands}, "
+                f"commands={commanded_positions}, "
                 f"feedback={feedback}, residuals={blocked_residuals} m, "
                 f"efforts={measured_efforts} N"
             )
         previous_feedback = feedback.copy()
         if monitor_table_clearance:
             clearance = float(get_gripper_table_clearance())
-            abort_threshold = (
-                float(os.environ.get("AURA_MIN_GRIPPER_TABLE_CLEARANCE", "0.012"))
-                + float(os.environ.get("AURA_TABLE_CLEARANCE_ABORT_MARGIN", "0.006"))
-            )
+            abort_threshold = get_gripper_table_contact_safe_clearance()
             if clearance < abort_threshold:
                 state.dach_arm.gripper.set_joint_positions(start_positions)
                 step_app(2)
@@ -1680,12 +1542,12 @@ def close_gripper_slowly(
                 )
         if np.all(contacted):
             hold_target = np.maximum(
-                contact_commands - GRIPPER_CONTACT_HOLD_PRELOAD * 1.5,
-                0.003,
+                commanded_positions - GRIPPER_CONTACT_HOLD_PRELOAD,
+                target_close,
             )
             print(
-                "✅ 双指均已接触，开始独立渐进预紧: "
-                f"step={i + 1}, contact_commands={contact_commands}, "
+                "✅ 双指均已接触，开始对称渐进预紧: "
+                f"step={i + 1}, contact_commands={commanded_positions}, "
                 f"hold_target={hold_target}, "
                 f"feedback={feedback}, residuals={blocked_residuals} m"
             )
@@ -1695,11 +1557,7 @@ def close_gripper_slowly(
                 f"   close step={i}, command={commanded_positions}, "
                 f"feedback={feedback}, residuals={blocked_residuals} m"
             )
-    settle_start_target = np.where(
-        contacted,
-        contact_commands,
-        commanded_positions,
-    )
+    settle_start_target = commanded_positions.copy()
     hold_target = settle_start_target.copy()
     preload_limit = np.maximum(
         settle_start_target - GRIPPER_CONTACT_HOLD_PRELOAD,
@@ -1754,10 +1612,7 @@ def close_gripper_slowly(
             )
         if monitor_table_clearance:
             clearance = float(get_gripper_table_clearance())
-            abort_threshold = (
-                float(os.environ.get("AURA_MIN_GRIPPER_TABLE_CLEARANCE", "0.012"))
-                + float(os.environ.get("AURA_TABLE_CLEARANCE_ABORT_MARGIN", "0.006"))
-            )
+            abort_threshold = get_gripper_table_contact_safe_clearance()
             if clearance < abort_threshold:
                 state.dach_arm.gripper.set_joint_positions(start_positions)
                 step_app(2)
@@ -1785,14 +1640,18 @@ def close_gripper_slowly(
         effort_feedback_available
         and np.all(final_efforts >= GRIPPER_CONTACT_FORCE_THRESHOLD)
     )
-    bilateral_contact_confirmed = bool(np.all(contacted))
+    final_finger_contacts = (
+        (final_efforts >= GRIPPER_CONTACT_FORCE_THRESHOLD)
+        if effort_feedback_available
+        else (final_residuals >= GRIPPER_CONTACT_PRELOAD_RESIDUAL)
+    )
     contact_confirmed = bool(
-        bilateral_contact_confirmed
+        np.all(final_finger_contacts)
         and (effort_contact_confirmed or residual_contact_confirmed)
     )
     return {
         "contact_confirmed": contact_confirmed,
-        "finger_contacts": contacted.copy(),
+        "finger_contacts": np.asarray(final_finger_contacts, dtype=bool),
         "hold_target": hold_target.copy(),
         "feedback": final_feedback.copy(),
         "blocked_residual_m": final_residual,
@@ -1944,13 +1803,9 @@ def reset_robot_after_task():
     """Best-effort cleanup that must run after every bridge task."""
     cleanup_errors = []
     try:
-        release_pregrasp_object()
+        clear_legacy_grasp_joints()
     except Exception as exc:
-        cleanup_errors.append(f"unfreeze: {type(exc).__name__}: {exc}")
-    try:
-        detach_simulated_object()
-    except Exception as exc:
-        cleanup_errors.append(f"detach: {type(exc).__name__}: {exc}")
+        cleanup_errors.append(f"legacy grasp cleanup: {type(exc).__name__}: {exc}")
 
     try:
         ensure_robot_control_ready()

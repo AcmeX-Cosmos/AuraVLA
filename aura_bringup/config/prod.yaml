@@ -12,7 +12,7 @@ logging:
 
 perception:
   vlm:
-    max_retries: 5
+    max_retries: 2
 
 execution:
   bridge:

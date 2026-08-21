@@ -25,10 +25,6 @@ from aura_isaac_bridge.core.state import (
     BANANA_MIN_SHORT_AXIS_ALIGNMENT,
     DACH_GRASP_HEIGHT_OFFSET, DACH_GRASP_YAW_OFFSET_RAD,
     MAX_GRASP_APPROACH_TILT_RAD, TARGET_GRASP_APPROACH_TILT_RAD,
-    BANANA_USE_SIMULATED_ATTACHMENT,
-    ALLOW_OVERSIZED_CAN_GRASP, LARGE_CAN_USE_SIMULATED_ATTACHMENT,
-    LARGE_CAN_CLOSED_JAW_CLEARANCE_LIFT,
-    LARGE_CAN_POST_CLOSE_MAX_CORRECTION,
     GRASP_REFINEMENT_STEPS, GRIPPER_CLOSE_FRAMES,
     GRIPPER_MAX_EFFORT, GRIPPER_STIFFNESS, GRIPPER_DAMPING,
     GRIPPER_CONTACT_RESIDUAL, GRIPPER_CONTACT_FORCE_THRESHOLD,
@@ -45,6 +41,7 @@ from aura_isaac_bridge.core.state import (
     DACH_PATH_CLEARANCE,
     TRAJECTORY_MAX_JOINT_STEP, TRAJECTORY_MIN_FRAMES, TRAJECTORY_SETTLE_FRAMES,
     GRASP_APPROACH_MAX_JOINT_STEP, GRASP_APPROACH_MIN_FRAMES,
+    GRASP_LIFT_MAX_JOINT_STEP, GRASP_LIFT_MIN_FRAMES,
     CARTESIAN_WAYPOINT_SPACING, CARRY_APEX_CLEARANCE,
     TRANSPORT_LIFT_HEIGHT, CARRY_CARTESIAN_WAYPOINT_SPACING,
     SHOW_GRASP_DEBUG, USE_GRASPNET, USE_GRASPNET_ORIENTATION,
@@ -60,20 +57,17 @@ from aura_isaac_bridge.core.perception import (
     quat_rotate,
     resolve_scene_prim_path,
     get_bbox_center,
+    get_current_bbox_center,
     get_mesh_center,
     get_mesh_extent_along_axis,
+    get_current_mesh_horizontal_cross_section_center,
     get_mesh_horizontal_principal_axes,
     show_red_grasp_point,
     release_cuda_inference_cache,
     infer_graspnet_world_pose,
 )
 from aura_isaac_bridge.core.motion import (
-    freeze_object_for_pregrasp,
-    release_pregrasp_object,
-    attach_simulated_object,
-    detach_simulated_object,
-    release_detached_object,
-    update_simulated_attachment,
+    clear_legacy_grasp_joints,
     get_active_joint_positions,
     get_left_joint_positions,
     ensure_robot_control_ready,
@@ -96,6 +90,7 @@ from aura_isaac_bridge.core.motion import (
     get_gripper_collision_diagnostics,
     get_object_gripper_containment,
     get_gripper_table_clearance,
+    get_gripper_table_contact_safe_clearance,
     get_gripper_closing_axis,
     get_gripper_inner_opening_width,
     get_gripper_center_local_offset,
@@ -525,10 +520,6 @@ def execute_pick_place(object_name, target_name):
     task_started = time.perf_counter()
 
     canonical_object_name = state.SCENE_NAME_RESOLVER.canonicalize(object_name)
-    large_can_mode = (
-        canonical_object_name in {"master_chef_can", "tomato_soup_can"}
-        and ALLOW_OVERSIZED_CAN_GRASP
-    )
     object_prim_path = resolve_scene_prim_path(object_name)
     state.TARGET_OBJECT_PRIM_PATH = object_prim_path
     target_prim = SingleXFormPrim(
@@ -539,8 +530,7 @@ def execute_pick_place(object_name, target_name):
         raise RuntimeError(f"抓取目标无效: {object_prim_path}")
 
     canonical_target_name = state.SCENE_NAME_RESOLVER.canonicalize(target_name)
-    release_pregrasp_object()
-    detach_simulated_object()
+    clear_legacy_grasp_joints()
     if not set_planning_basket_obstacle_enabled(True):
         return {
             "success": False,
@@ -554,8 +544,9 @@ def execute_pick_place(object_name, target_name):
         step_app(3)
     ensure_robot_control_ready()
     gripper_open_target = get_gripper_open_target(object_name)
-    _, precheck_bbox_min, precheck_bbox_max = get_bbox_center(
+    _, precheck_bbox_min, precheck_bbox_max = get_current_bbox_center(
         get_current_stage(),
+        target_prim,
         object_prim_path,
     )
     precheck_started = time.perf_counter()
@@ -578,7 +569,6 @@ def execute_pick_place(object_name, target_name):
     state.dach_arm.gripper.set_joint_positions(gripper_open_target)
     step_app(10)
     ensure_pickable_object(get_current_stage(), object_prim_path)
-    freeze_object_for_pregrasp(object_prim_path)
     state.dach_arm.gripper.set_joint_positions(gripper_open_target)
     step_app(10)
 
@@ -588,7 +578,6 @@ def execute_pick_place(object_name, target_name):
     graspnet_position_active = False
     perception_started = time.perf_counter()
     if not USE_GRASPNET:
-        release_pregrasp_object()
         return {
             "success": False,
             "message": "GraspNet perception is mandatory but disabled",
@@ -605,7 +594,6 @@ def execute_pick_place(object_name, target_name):
         )
     except Exception:
         release_cuda_inference_cache()
-        release_pregrasp_object()
         print("❌ GraspNet 视觉抓取不可用，强制任务终止")
         return {
             "success": False,
@@ -634,7 +622,9 @@ def execute_pick_place(object_name, target_name):
         f"{time.perf_counter() - perception_started:.2f} s"
     )
 
-    bbox_center, bbox_min, bbox_max = get_bbox_center(get_current_stage(), object_prim_path)
+    bbox_center, bbox_min, bbox_max = get_current_bbox_center(
+        get_current_stage(), target_prim, object_prim_path
+    )
     if not graspnet_position_active and canonical_object_name != "banana":
         object_position = np.asarray(bbox_center, dtype=float).copy()
         print(
@@ -680,14 +670,20 @@ def execute_pick_place(object_name, target_name):
     # containment guard, so closing never begins with the object beside a jaw.
     physical_alignment_center = grasp_target_center.copy()
     if graspnet_position_active:
-        containment_xy_error = (
-            np.asarray(bbox_center[:2], dtype=float)
-            - physical_alignment_center[:2]
-        )
-        containment_xy_error_norm = float(np.linalg.norm(containment_xy_error))
         bbox_center_array = np.asarray(bbox_center, dtype=float)
         bbox_min_array = np.asarray(bbox_min, dtype=float)
         bbox_max_array = np.asarray(bbox_max, dtype=float)
+        geometry_margin = 0.01
+        graspnet_xy_in_bounds = bool(
+            np.all(
+                physical_alignment_center[:2]
+                >= bbox_min_array[:2] - geometry_margin
+            )
+            and np.all(
+                physical_alignment_center[:2]
+                <= bbox_max_array[:2] + geometry_margin
+            )
+        )
         graspnet_vertical_margin = max(
             0.01,
             0.15 * float(bbox_max_array[2] - bbox_min_array[2]),
@@ -697,8 +693,32 @@ def execute_pick_place(object_name, target_name):
             <= physical_alignment_center[2]
             <= bbox_max_array[2] + graspnet_vertical_margin
         )
-        if containment_xy_error_norm <= 0.04 and graspnet_z_in_bounds:
-            physical_alignment_center[:2] = bbox_center[:2]
+        if graspnet_xy_in_bounds and graspnet_z_in_bounds:
+            if canonical_object_name == "banana":
+                section_center = get_current_mesh_horizontal_cross_section_center(
+                    get_current_stage(),
+                    target_prim,
+                    physical_alignment_center[:2],
+                    object_prim_path,
+                )
+                section_correction = (
+                    np.asarray(section_center, dtype=float)
+                    - physical_alignment_center[:2]
+                )
+                physical_alignment_center[:2] = section_center
+                print(
+                    "📐 香蕉 GraspNet 抓取点已校正到局部实体截面中心: "
+                    f"correction={section_correction}, "
+                    f"target={physical_alignment_center[:2]}"
+                )
+            else:
+                containment_xy_error = (
+                    bbox_center_array[:2] - physical_alignment_center[:2]
+                )
+                containment_xy_error_norm = float(
+                    np.linalg.norm(containment_xy_error)
+                )
+                physical_alignment_center[:2] = bbox_center_array[:2]
             if canonical_object_name in {"master_chef_can", "tomato_soup_can"}:
                 # GraspNet is mandatory for visual inference, but its sampled
                 # pinch point can land on the can label/cap rather than the
@@ -712,35 +732,29 @@ def execute_pick_place(object_name, target_name):
                     "📐 罐头 GraspNet 抓取点已投影到 DACH 几何中心: "
                     f"xy_error={containment_xy_error_norm:.4f} m"
                 )
-            print(
-                "📐 GraspNet 抓取点物理包含校正: "
-                f"xy_error={containment_xy_error}, "
-                f"norm={containment_xy_error_norm:.4f} m"
-            )
+            if canonical_object_name != "banana":
+                print(
+                    "📐 GraspNet 抓取点物理包含校正: "
+                    f"xy_error={containment_xy_error}, "
+                    f"norm={containment_xy_error_norm:.4f} m"
+                )
         else:
             print(
-                "⚠️ GraspNet 点未通过几何一致性检查，"
-                f"xy_error={containment_xy_error_norm:.4f} m, "
-                f"z_in_bounds={graspnet_z_in_bounds}; "
-                "回退到 USD 包围盒中心"
+                "⛔ GraspNet 点未通过目标几何一致性检查: "
+                f"xy_in_bounds={graspnet_xy_in_bounds}, "
+                f"z_in_bounds={graspnet_z_in_bounds}"
             )
-            # A detector point outside the object's collision geometry is not
-            # a valid grasp center. Use the bounded scene fallback, including
-            # the configured lift offset used by the Aura scene-pose path.
-            graspnet_position_active = False
-            object_position = bbox_center_array.copy()
-            minimum_grasp_height = bbox_min_array[2] + (
-                bbox_max_array[2] - bbox_min_array[2]
-            ) * GRASP_MIN_HEIGHT_FRACTION
-            object_position[2] = max(object_position[2], minimum_grasp_height)
-            object_position = adjust_object_grasp_position(
-                object_name,
-                object_position,
-                bbox_min_array,
-                bbox_max_array,
-            )
-            object_position[2] += DACH_GRASP_HEIGHT_OFFSET
-            grasp_target_center = object_position.copy()
+            return {
+                "success": False,
+                "message": "GraspNet point is outside the target geometry",
+                "error_code": "GRASPNET_GEOMETRY_MISMATCH",
+                "object_name": str(object_name),
+                "target_name": str(target_name),
+                "graspnet_position": object_position.tolist(),
+                "bbox_min": bbox_min_array.tolist(),
+                "bbox_max": bbox_max_array.tolist(),
+                "perception_source": perception_source,
+            }
     final_grasp_tcp = get_tcp_target_for_gripper_center(
         object_position,
         grasp_orientation,
@@ -953,8 +967,9 @@ def execute_pick_place(object_name, target_name):
     if graspnet_position_active:
         object_position = grasp_target_center.copy()
     else:
-        live_bbox_center, live_bbox_min, live_bbox_max = get_bbox_center(
+        live_bbox_center, live_bbox_min, live_bbox_max = get_current_bbox_center(
             get_current_stage(),
+            target_prim,
             object_prim_path,
         )
         live_object_position, _, _ = get_sim_pose(target_prim)
@@ -1146,16 +1161,7 @@ def execute_pick_place(object_name, target_name):
     )
     if required_opening_width > gripper_opening_width:
         move_robot_home(frames=90)
-        release_pregrasp_object()
         message = "object is wider than the physical gripper opening"
-        if (
-            canonical_object_name in {"master_chef_can", "tomato_soup_can"}
-            and ALLOW_OVERSIZED_CAN_GRASP
-        ):
-            message = (
-                "Isaac oversized-can mode is enabled, but the live gripper opening "
-                "was not reloaded with the extended jaw limit"
-            )
         return {
             "success": False,
             "message": message,
@@ -1166,7 +1172,6 @@ def execute_pick_place(object_name, target_name):
                 "object_width_on_closing_axis_m": float(object_closing_width),
                 "required_opening_m": required_opening_width,
                 "safety_margin_m": aperture_margin,
-                "oversized_can_mode_enabled": bool(ALLOW_OVERSIZED_CAN_GRASP),
             },
         }
     banana_closed_center_offset = np.zeros(2, dtype=float)
@@ -1250,18 +1255,13 @@ def execute_pick_place(object_name, target_name):
             gripper_positions=gripper_open_target,
             monitor_table_clearance=True,
         )
-        if not hover_alignment_reached and not large_can_mode:
+        if not hover_alignment_reached:
             move_robot_home(frames=90)
             return {
                 "success": False,
                 "message": "failed to align finger midpoint at hover height",
                 "planar_error": planar_error.tolist(),
             }
-        if not hover_alignment_reached:
-            print(
-                "↪️ 扩展罐头悬停对中未完全到达终点，"
-                "继续固定姿态重测量"
-            )
     live_finger_midpoint = get_gripper_finger_midpoint()
     desired_planar_center = (
         np.asarray(physical_alignment_center[:2], dtype=float)
@@ -1285,8 +1285,8 @@ def execute_pick_place(object_name, target_name):
 
     # Safety guard: predict finger table clearance at the grasp position and
     # lift the grasp center if the tilted jaw would dip below the safety
-    # threshold.  We use the *current* finger world positions (at hover) and
-    # the planned vertical descent to predict the finger bottom Z at grasp.
+    # threshold. Use the live finger-center-to-bottom geometry directly;
+    # inferring it from TCP descent is inaccurate for the offset DACH jaws.
     if state.planning_table_surface_z is not None:
         min_finger_clearance = float(
             os.environ.get("AURA_MIN_GRIPPER_TABLE_CLEARANCE", "0.0")
@@ -1303,30 +1303,28 @@ def execute_pick_place(object_name, target_name):
             configured_guard_pad,
             0.003 if canonical_object_name == "banana" else configured_guard_pad,
         )
-        closed_jaw_clearance_lift = (
-            LARGE_CAN_CLOSED_JAW_CLEARANCE_LIFT
-            if large_can_mode
-            else 0.0
-        )
-        guard_target_clearance = (
-            min_finger_clearance
-            + guard_pad
-            + closed_jaw_clearance_lift
+        guard_target_clearance = max(
+            min_finger_clearance + guard_pad,
+            get_gripper_table_contact_safe_clearance(),
         )
         current_finger_bottom = min(
             float(np.min(get_finger_collision_world_corners(state.left_finger, "left")[:, 2])),
             float(np.min(get_finger_collision_world_corners(state.right_finger, "right")[:, 2])),
         )
-        current_clearance = current_finger_bottom - state.planning_table_surface_z
-        current_tcp_z = float(get_rmp_ee_position()[2])
-        predicted_descent = current_tcp_z - float(grasp_position[2])
-        predicted_clearance = current_clearance - predicted_descent
+        current_finger_center_z = float(get_gripper_collision_center()[2])
+        finger_bottom_offset = current_finger_bottom - current_finger_center_z
+        predicted_finger_bottom = (
+            float(physical_alignment_center[2]) + finger_bottom_offset
+        )
+        predicted_clearance = (
+            predicted_finger_bottom - state.planning_table_surface_z
+        )
         if predicted_clearance < guard_target_clearance:
             required_lift = guard_target_clearance - predicted_clearance
             print(
                 f"⚠️ Grasp finger clearance unsafe: "
-                f"current_clearance={current_clearance:.4f} m, "
-                f"predicted_descent={predicted_descent:.4f} m, "
+                f"finger_bottom_offset={finger_bottom_offset:.4f} m, "
+                f"predicted_bottom={predicted_finger_bottom:.4f} m, "
                 f"predicted={predicted_clearance:.4f} m < "
                 f"target={guard_target_clearance:.4f} m, "
                 f"lifting grasp center by {required_lift:.4f} m"
@@ -1381,11 +1379,7 @@ def execute_pick_place(object_name, target_name):
     )
     grasp_position = get_rmp_ee_position().copy()
 
-    refinement_steps = (
-        max(GRASP_REFINEMENT_STEPS, 3)
-        if large_can_mode
-        else GRASP_REFINEMENT_STEPS
-    )
+    refinement_steps = GRASP_REFINEMENT_STEPS
     for refinement in range(refinement_steps):
         live_finger_center = get_gripper_collision_center()
         if graspnet_position_active:
@@ -1417,7 +1411,7 @@ def execute_pick_place(object_name, target_name):
             gripper_positions=gripper_open_target,
             monitor_table_clearance=True,
         )
-        if not refinement_reached and not large_can_mode:
+        if not refinement_reached:
             move_robot_home(frames=90)
             return {
                 "success": False,
@@ -1445,9 +1439,7 @@ def execute_pick_place(object_name, target_name):
     if planar_error_norm > planar_center_tolerance:
         low_pose_clearance = float(get_gripper_table_clearance())
         correction_limit = (
-            0.03
-            if canonical_object_name == "banana" or large_can_mode
-            else 0.0
+            0.03 if canonical_object_name == "banana" else 0.0
         )
         correction_clearance = max(
             float(os.environ.get("AURA_MIN_GRIPPER_TABLE_CLEARANCE", "0.0"))
@@ -1496,6 +1488,50 @@ def execute_pick_place(object_name, target_name):
                 "gripper_table_clearance_m": low_pose_clearance,
             }
 
+    # Resolve the final vertical insertion from live collision geometry. The
+    # hover-stage TCP estimate can be conservative by several centimetres on
+    # DACH; a real grasp still needs the finger colliders to overlap the upper
+    # body of the banana while remaining clear of the table.
+    if canonical_object_name == "banana":
+        safe_clearance = get_gripper_table_contact_safe_clearance()
+        target_clearance = safe_clearance + 0.002
+        live_clearance = float(get_gripper_table_clearance())
+        if live_clearance > target_clearance + 0.004:
+            insertion_distance = live_clearance - target_clearance
+            insertion_target = get_rmp_ee_position().copy()
+            insertion_target[2] -= insertion_distance
+            print(
+                "⬇️ 香蕉最终垂直插入: "
+                f"clearance={live_clearance:.4f} m -> "
+                f"target={target_clearance:.4f} m, "
+                f"descent={insertion_distance:.4f} m"
+            )
+            insertion_reached = move_ee_smooth(
+                "banana_final_vertical_insertion",
+                get_rmp_ee_position(),
+                insertion_target,
+                segments=2,
+                max_steps_per_segment=50,
+                tolerance=0.006,
+                orientation=grasp_motion_orientation,
+                gripper_positions=gripper_open_target,
+                monitor_table_clearance=True,
+            )
+            live_clearance = float(get_gripper_table_clearance())
+            if (
+                not insertion_reached
+                or live_clearance > target_clearance + 0.006
+            ):
+                move_robot_home(frames=90)
+                return {
+                    "success": False,
+                    "message": "failed to reach physical banana grasp depth",
+                    "gripper_table_clearance_m": live_clearance,
+                    "target_clearance_m": target_clearance,
+                }
+        grasp_position = get_rmp_ee_position().copy()
+        physical_alignment_center[2] = get_gripper_collision_center()[2]
+
     gripper_table_clearance = get_gripper_table_clearance()
     print(
         f"🛡️ 夹爪前段桌面间隙: {gripper_table_clearance:.4f} m "
@@ -1534,20 +1570,25 @@ def execute_pick_place(object_name, target_name):
             "minimum_alignment": alignment_threshold,
         }
 
-    use_simulated_attachment = (
-        LARGE_CAN_USE_SIMULATED_ATTACHMENT
-        if canonical_object_name in {"master_chef_can", "tomato_soup_can"}
-        else BANANA_USE_SIMULATED_ATTACHMENT
-    )
-
-    # Keep the lightweight object kinematic while the jaws close.  It still
-    # participates in collision, but the first contacting finger cannot shove
-    # it out of the second finger's path.  attach_simulated_object() releases
-    # the kinematic lock and creates the FixedJoint in the same control tick.
+    # Keep the dynamic target settled while the open gripper holds its final
+    # physical pose. No kinematic freeze or attachment is used.
     for _ in range(5):
         hold_ee_target(grasp_position, grasp_motion_orientation)
         state.dach_arm.gripper.set_joint_positions(gripper_open_target)
         step_app()
+    preclose_table_clearance = float(get_gripper_table_clearance())
+    if canonical_object_name == "banana":
+        preclose_target_clearance = (
+            get_gripper_table_contact_safe_clearance() + 0.002
+        )
+        if preclose_table_clearance > preclose_target_clearance + 0.006:
+            move_robot_home(frames=90)
+            return {
+                "success": False,
+                "message": "banana gripper drifted above the physical grasp depth",
+                "gripper_table_clearance_m": preclose_table_clearance,
+                "target_clearance_m": preclose_target_clearance,
+            }
     nominal_gripper_close_target = np.asarray(
         gripper_close_target, dtype=float
     ).copy()
@@ -1557,7 +1598,7 @@ def execute_pick_place(object_name, target_name):
         orientation=grasp_motion_orientation,
         frames=get_gripper_close_frames(object_name),
         target_close=nominal_gripper_close_target,
-        monitor_table_clearance=False,
+        monitor_table_clearance=True,
     )
     gripper_close_target = np.asarray(
         close_result["hold_target"], dtype=float
@@ -1576,54 +1617,6 @@ def execute_pick_place(object_name, target_name):
     measured_efforts = np.asarray(
         close_result["measured_efforts_n"], dtype=float
     )
-    # Fallback: if the gripper closed to its target without detecting contact
-    # but the object barely moved, do a test lift to verify grasp
-    fallback_triggered = False
-    if (
-        not contact_confirmed
-        and close_displacement < 0.002
-        and state._pregrasp_frozen_prim_path is None
-    ):
-        fallback_triggered = True
-        print(
-            "⚠️ 接触校验未触发但物体位移极小，尝试测试抬升验证夹持: "
-            f"displacement={close_displacement:.4f}m"
-        )
-        # Test lift: raise 0.02m to verify object is actually grasped
-        test_lift_position = grasp_position.copy()
-        test_lift_position[2] += 0.02
-        test_lift_ok = move_ee_smooth(
-            "test_lift",
-            grasp_position,
-            test_lift_position,
-            segments=1,
-            max_steps_per_segment=30,
-            tolerance=0.03,
-            orientation=grasp_motion_orientation,
-            gripper_positions=gripper_close_target,
-        )
-        test_object_position, _, _ = get_sim_pose(target_prim)
-        test_lift_distance = float(test_object_position[2] - object_position_before_close[2])
-        if test_lift_ok and test_lift_distance >= 0.015:
-            contact_confirmed = True
-            print(
-                f"✅ 测试抬升成功: lift={test_lift_distance:.4f}m，确认夹持"
-            )
-            # Lower back to grasp position before full lift
-            move_ee_smooth(
-                "test_lower",
-                test_lift_position,
-                grasp_position,
-                segments=1,
-                max_steps_per_segment=30,
-                tolerance=0.03,
-                orientation=grasp_motion_orientation,
-                gripper_positions=gripper_close_target,
-            )
-        else:
-            print(
-                f"❌ 测试抬升失败: lift={test_lift_distance:.4f}m，未夹住物体"
-            )
     print(
         "🧪 夹持接触校验: "
         f"feedback={gripper_feedback}, target={gripper_close_target}, "
@@ -1644,7 +1637,6 @@ def execute_pick_place(object_name, target_name):
             orientation=grasp_motion_orientation,
             target_open=gripper_open_target,
         )
-        release_pregrasp_object()
         return {
             "success": False,
             "message": "grasp contact was not confirmed; lift was not commanded",
@@ -1654,10 +1646,17 @@ def execute_pick_place(object_name, target_name):
             "gripper_efforts_n": measured_efforts.tolist(),
             "closure_residual_m": closure_residual,
             "object_displacement_m": close_displacement,
+            "object_position_before_close": object_position_before_close.tolist(),
+            "object_position_after_close": object_position_after_close.tolist(),
+            "graspnet_target_position": grasp_target_center.tolist(),
+            "physical_alignment_center": physical_alignment_center.tolist(),
+            "preclose_table_clearance_m": preclose_table_clearance,
             "gripper_table_clearance_m": get_gripper_table_clearance(),
             "finger_colliders": collision_diagnostics,
         }
-    grasp_containment = get_object_gripper_containment(object_prim_path)
+    grasp_containment = get_object_gripper_containment(
+        object_prim_path, target_prim=target_prim
+    )
     print(
         "🧪 闭合后双指空间包含校验: "
         f"contained={grasp_containment['contained']}, "
@@ -1665,170 +1664,21 @@ def execute_pick_place(object_name, target_name):
         f"approach={grasp_containment['approach_error_m']:.4f} m, "
         f"lateral={grasp_containment['lateral_error_m']:.4f} m"
     )
-    containment_retry = None
-    if not grasp_containment["contained"] and large_can_mode:
-        first_containment = grasp_containment
-        planar_correction = np.asarray(
-            first_containment["object_center"], dtype=float
-        ) - np.asarray(first_containment["gripper_center"], dtype=float)
-        planar_correction[2] = 0.0
-        planar_correction_norm = float(np.linalg.norm(planar_correction))
-        retry_clearance = float(get_gripper_table_clearance())
-        retry_clearance_minimum = (
-            MIN_GRIPPER_TABLE_CLEARANCE
-            + TABLE_CLEARANCE_ABORT_MARGIN
-            + float(os.environ.get("AURA_GRASP_CLEARANCE_GUARD_PAD", "0.0005"))
-        )
-        retry_eligible = bool(
-            abs(first_containment["axial_error_m"])
-            <= first_containment["axial_limit_m"]
-            and first_containment["approach_inside"]
-            and planar_correction_norm <= LARGE_CAN_POST_CLOSE_MAX_CORRECTION
-            and retry_clearance >= retry_clearance_minimum
-        )
-        containment_retry = {
-            "attempted": retry_eligible,
-            "planar_correction_m": planar_correction.tolist(),
-            "planar_correction_norm_m": planar_correction_norm,
-            "maximum_correction_m": LARGE_CAN_POST_CLOSE_MAX_CORRECTION,
-            "clearance_before_retry_m": retry_clearance,
-            "minimum_clearance_m": retry_clearance_minimum,
-            "first_containment": first_containment,
-        }
-        if retry_eligible:
-            print(
-                "↪️ 扩展罐头闭合后平面对中重试: "
-                f"correction={planar_correction}, "
-                f"norm={planar_correction_norm:.4f} m, "
-                f"clearance={retry_clearance:.4f} m"
-            )
-            retry_start_tcp = get_rmp_ee_position().copy()
-            open_gripper_slowly(
-                retry_start_tcp,
-                orientation=grasp_motion_orientation,
-                target_open=gripper_open_target,
-            )
-            retry_target_tcp = get_rmp_ee_position().copy()
-            retry_target_tcp[:2] += planar_correction[:2]
-            retry_reached = move_ee_smooth(
-                "large_can_post_close_recenter",
-                get_rmp_ee_position(),
-                retry_target_tcp,
-                segments=2,
-                max_steps_per_segment=40,
-                tolerance=0.008,
-                orientation=grasp_motion_orientation,
-                gripper_positions=gripper_open_target,
-                monitor_table_clearance=True,
-            )
-            grasp_position = get_rmp_ee_position().copy()
-            containment_retry["motion_reached"] = bool(retry_reached)
-            containment_retry["clearance_after_motion_m"] = float(
-                get_gripper_table_clearance()
-            )
-            if retry_reached:
-                for _ in range(5):
-                    hold_ee_target(grasp_position, grasp_motion_orientation)
-                    state.dach_arm.gripper.set_joint_positions(gripper_open_target)
-                    step_app()
-                object_position_before_close, _, _ = get_sim_pose(target_prim)
-                close_result = close_gripper_slowly(
-                    grasp_position,
-                    orientation=grasp_motion_orientation,
-                    frames=get_gripper_close_frames(object_name),
-                    target_close=nominal_gripper_close_target,
-                    monitor_table_clearance=True,
-                )
-                gripper_close_target = np.asarray(
-                    close_result["hold_target"], dtype=float
-                )
-                gripper_feedback = np.asarray(
-                    state.dach_arm.gripper.get_joint_positions(), dtype=float
-                )
-                closure_residual = float(
-                    np.mean(
-                        np.maximum(
-                            gripper_feedback - gripper_close_target,
-                            0.0,
-                        )
-                    )
-                )
-                object_position_after_close, _, _ = get_sim_pose(target_prim)
-                close_displacement = float(
-                    np.linalg.norm(
-                        object_position_after_close - object_position_before_close
-                    )
-                )
-                contact_confirmed = bool(close_result["contact_confirmed"])
-                measured_efforts = np.asarray(
-                    close_result["measured_efforts_n"], dtype=float
-                )
-                containment_retry["contact_confirmed"] = contact_confirmed
-                grasp_containment = get_object_gripper_containment(
-                    object_prim_path
-                )
-                containment_retry["final_containment"] = grasp_containment
-                print(
-                    "🧪 扩展罐头重闭合校验: "
-                    f"contact={contact_confirmed}, "
-                    f"contained={grasp_containment['contained']}, "
-                    f"axial={grasp_containment['axial_error_m']:.4f} m, "
-                    f"approach={grasp_containment['approach_error_m']:.4f} m, "
-                    f"lateral={grasp_containment['lateral_error_m']:.4f} m"
-                )
-        else:
-            print(
-                "⛔ 扩展罐头闭合后重试被安全边界拒绝: "
-                f"correction={planar_correction_norm:.4f} m, "
-                f"clearance={retry_clearance:.4f} m, "
-                f"axial_ok={abs(first_containment['axial_error_m']) <= first_containment['axial_limit_m']}, "
-                f"approach_ok={first_containment['approach_inside']}"
-            )
-    if not contact_confirmed:
-        open_gripper_slowly(
-            grasp_position,
-            orientation=grasp_motion_orientation,
-            target_open=gripper_open_target,
-        )
-        release_pregrasp_object()
-        return {
-            "success": False,
-            "message": "grasp contact was not confirmed after containment retry",
-            "object_name": str(object_name),
-            "target_name": str(target_name),
-            "gripper_feedback": gripper_feedback.tolist(),
-            "gripper_efforts_n": measured_efforts.tolist(),
-            "closure_residual_m": closure_residual,
-            "object_displacement_m": close_displacement,
-            "containment_retry": containment_retry,
-        }
     if not grasp_containment["contained"]:
         open_gripper_slowly(
             grasp_position,
             orientation=grasp_motion_orientation,
             target_open=gripper_open_target,
         )
-        release_pregrasp_object()
         return {
             "success": False,
             "message": "object is not physically centered between both fingers",
             "object_name": str(object_name),
             "target_name": str(target_name),
             "grasp_containment": grasp_containment,
-            "containment_retry": containment_retry,
         }
-    if use_simulated_attachment and contact_confirmed:
-        attach_simulated_object(target_prim, object_prim_path)
-        grasp_strategy += "+contact_confirmed_fixed_joint"
-        print("🧲 已建立 Isaac 仿真固定连接")
-    elif use_simulated_attachment:
-        use_simulated_attachment = False
-        print("⚠️ 未检测到夹持阻力，禁止仿真随动附着")
-    else:
-        release_pregrasp_object()
-    # Keep the wrist orientation constrained throughout lift/carry. The old
-    # per-frame teleport attachment needed a free orientation and allowed the
-    # IK/RRT solution to twist the arm; a rigid PhysX joint does not.
+    # Keep the wrist orientation constrained throughout lift/carry. Object
+    # motion is governed only by finger contact, friction, and gravity.
     transport_orientation = grasp_motion_orientation
     live_object_before_lift, _, _ = get_sim_pose(target_prim)
     print(
@@ -1850,8 +1700,11 @@ def execute_pick_place(object_name, target_name):
         tolerance=0.065,
         orientation=transport_orientation,
         gripper_positions=gripper_close_target,
+        max_joint_step_rad=GRASP_LIFT_MAX_JOINT_STEP,
+        minimum_frames=GRASP_LIFT_MIN_FRAMES,
     )
     lifted_object_position, _, _ = get_sim_pose(target_prim)
+    lifted_gripper_position = get_rmp_ee_position().copy()
     object_lift_distance = float(
         lifted_object_position[2] - initial_object_position[2]
     )
@@ -1864,9 +1717,6 @@ def execute_pick_place(object_name, target_name):
             f"❌ 夹取验证失败: 物体仅抬升 {object_lift_distance:.3f} m，"
             f"要求至少 {MINIMUM_OBJECT_LIFT:.3f} m"
         )
-        if state._simulated_attachment is not None:
-            detach_simulated_object()
-            step_app(2)
         open_gripper_slowly(
             lift_position,
             orientation=transport_orientation,
@@ -1886,6 +1736,21 @@ def execute_pick_place(object_name, target_name):
             },
             "object_lift_distance": object_lift_distance,
             "object_horizontal_displacement": object_horizontal_displacement,
+            "object_position_before_close": object_position_before_close.tolist(),
+            "object_position_after_close": object_position_after_close.tolist(),
+            "object_position_before_lift": live_object_before_lift.tolist(),
+            "object_position_after_lift": lifted_object_position.tolist(),
+            "close_displacement_m": close_displacement,
+            "gripper_feedback": gripper_feedback.tolist(),
+            "gripper_target": gripper_close_target.tolist(),
+            "gripper_efforts_n": measured_efforts.tolist(),
+            "finger_contacts": close_result["finger_contacts"].tolist(),
+            "grasp_containment": grasp_containment,
+            "preclose_table_clearance_m": preclose_table_clearance,
+            "planned_lift_position": lift_position.tolist(),
+            "actual_lift_position": lifted_gripper_position.tolist(),
+            "lift_minimum_frames": GRASP_LIFT_MIN_FRAMES,
+            "lift_max_joint_step_rad": GRASP_LIFT_MAX_JOINT_STEP,
             "grasp_position": object_position.tolist(),
             "place_position": goal_position.tolist(),
         }
@@ -2007,9 +1872,6 @@ def execute_pick_place(object_name, target_name):
         carry_ok = carry_error <= 0.08
     if not carry_ok:
         abort_position = get_rmp_ee_position()
-        if state._simulated_attachment is not None:
-            detach_simulated_object()
-            step_app(2)
         open_gripper_slowly(
             abort_position,
             orientation=grasp_motion_orientation,
@@ -2107,10 +1969,6 @@ def execute_pick_place(object_name, target_name):
             "target_name": str(target_name),
             "lower_error_m": lower_error,
         }
-    release_attachment = None
-    if state._simulated_attachment is not None:
-        release_attachment = detach_simulated_object(hold_kinematic=True)
-        step_app(2)
     # Do not open the jaws inside the basket.  First move the still-closed
     # gripper vertically clear of the can and rim; opening in place can sweep
     # a finger through the can and pull it back out with the wrist.
@@ -2138,23 +1996,18 @@ def execute_pick_place(object_name, target_name):
     )
     # Make the release observable in PhysX as well as in the command stream:
     # the slow controller can finish one frame short of its target when the
-    # wrist is settling.  Hold the jaws at their calibrated open limit for a
-    # few physics frames before freeing the kinematic hand-off state.
+    # wrist is settling. Hold the jaws at their calibrated open limit for a
+    # few physics frames before measuring placement.
     state.dach_arm.gripper.set_joint_positions(gripper_open_target)
     step_app(5)
-    # Keep the released object kinematic while the robot retreats.  If it is
-    # made dynamic immediately, the retreat/home trajectory can brush the can
-    # through the basket wall before the arm is clear.
-    # Let the free rigid body settle against the basket floor before measuring
-    # containment.  During this first window it remains fixed in the basket.
+    # The object remains a free dynamic rigid body while the robot retreats.
+    # Let it settle against the basket floor before measuring containment.
     step_app(120)
     release_feedback = np.asarray(
         state.dach_arm.gripper.get_joint_positions(), dtype=float
     )
     release_error = float(np.max(np.abs(release_feedback - gripper_open_target)))
-    release_verified = bool(
-        state._simulated_attachment is None and release_error <= 0.005
-    )
+    release_verified = bool(release_error <= 0.005)
     print(
         f"👐 放置释放校验: feedback={release_feedback}, "
         f"target={gripper_open_target}, error={release_error:.4f}, "
@@ -2245,11 +2098,6 @@ def execute_pick_place(object_name, target_name):
                 "target_name": str(target_name),
             }
     move_robot_home(frames=90)
-
-    if release_attachment is not None:
-        release_detached_object(release_attachment)
-        # Now that the robot is clear, let PhysX settle the can as a free body.
-        step_app(120)
 
     # Re-check after the arm has fully retreated and returned HOME.  The
     # released can must remain contained after all robot motion, not only at

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import base64
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.client import RemoteDisconnected
 from io import BytesIO
 import json
@@ -11,6 +12,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 import sys
+from threading import Event
 import time
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
@@ -65,14 +67,13 @@ else:
 
 
 SYSTEM_PROMPT = """Return one compact JSON object only. Understand the user instruction
-and the RGBD robot scene; RGB is above a colored depth strip where warmer colors
-indicate nearer pixels.
+and the current RGB robot scene.
 
 The current attached RGB image is authoritative and replaces scene information from
 older turns. For questions asking what is in the scene, inspect the current RGB image
 carefully and list every clearly visible movable object and container with color and
-relative image position. Do not describe RGBD encoding, depth colors, or camera data
-unless explicitly asked. Do not claim an object that is not visible in the current RGB.
+relative image position. Do not describe image encoding or camera data unless explicitly
+asked. Do not claim an object that is not visible in the current RGB.
 
 IMPORTANT: Scene objects may have multiple names. When the user refers to an
 object that doesn't exactly match what you see, map to the closest visible container:
@@ -123,21 +124,27 @@ class VLMBackend(Protocol):
         ...
 
 
+class NvidiaTransientError(RuntimeError):
+    """NVIDIA service or transport failure that may recover without user action."""
+
+
 @dataclass(frozen=True)
 class NvidiaConfig:
     model_name_or_path: str = DEFAULT_NVIDIA_MODEL
     base_url: str = DEFAULT_NVIDIA_BASE_URL
     api_key: str | None = None
-    max_tokens: int = 4096
+    api_keys: tuple[str, ...] = ()
+    max_tokens: int = 768
     temperature: float = 1.0
     top_p: float = 1.0
     frequency_penalty: float = 0.0
     presence_penalty: float = 0.0
     request_timeout_sec: float = 300.0
-    max_retries: int = 3
+    parallel_request_timeout_sec: float = 60.0
+    max_retries: int = 2
     retry_backoff_sec: float = 1.0
     image_max_edge: int = 448
-    max_history_messages: int = 6
+    max_history_messages: int = 2
 
     @classmethod
     def from_mapping(cls, settings: Mapping[str, Any]) -> "NvidiaConfig":
@@ -145,24 +152,34 @@ class NvidiaConfig:
         agent = settings.get("agent", {})
         if not isinstance(nvidia, Mapping) or not isinstance(agent, Mapping):
             raise ValueError("config sections 'nvidia' and 'agent' must be objects")
+        configured_keys = _normalize_api_keys(nvidia.get("api_keys"))
+        environment_keys = _normalize_api_keys(os.getenv("NVIDIA_API_KEYS"))
+        api_keys = environment_keys or configured_keys
         configured_key = nvidia.get("api_key")
         api_key = os.getenv("NVIDIA_API_KEY") or (
             str(configured_key).strip() if configured_key else None
         )
+        if not api_keys and api_key:
+            api_keys = (_normalize_api_key(api_key),)
+        api_keys = tuple(key for key in api_keys if key)
         return cls(
             model_name_or_path=str(nvidia.get("model", DEFAULT_NVIDIA_MODEL)),
             base_url=str(nvidia.get("base_url", DEFAULT_NVIDIA_BASE_URL)),
             api_key=_normalize_api_key(api_key),
-            max_tokens=int(nvidia.get("max_tokens", 4096)),
+            api_keys=api_keys,
+            max_tokens=int(nvidia.get("max_tokens", 768)),
             temperature=float(nvidia.get("temperature", 1.0)),
             top_p=float(nvidia.get("top_p", 1.0)),
             frequency_penalty=float(nvidia.get("frequency_penalty", 0.0)),
             presence_penalty=float(nvidia.get("presence_penalty", 0.0)),
             request_timeout_sec=float(nvidia.get("request_timeout_sec", 300.0)),
-            max_retries=int(nvidia.get("max_retries", 3)),
+            parallel_request_timeout_sec=float(
+                nvidia.get("parallel_request_timeout_sec", 60.0)
+            ),
+            max_retries=int(nvidia.get("max_retries", 2)),
             retry_backoff_sec=float(nvidia.get("retry_backoff_sec", 1.0)),
             image_max_edge=int(agent.get("image_max_edge", 448)),
-            max_history_messages=int(agent.get("max_history_messages", 6)),
+            max_history_messages=int(agent.get("max_history_messages", 2)),
         )
 
     @classmethod
@@ -198,7 +215,12 @@ class RGBDImageEncoder:
                     (max(1, round(width * scale)), max(1, round(height * scale))),
                     interpolation=cv2.INTER_AREA,
                 )
-            encoded, buffer = cv2.imencode(".png", array)
+            if is_depth:
+                encoded, buffer = cv2.imencode(".png", array)
+            else:
+                encoded, buffer = cv2.imencode(
+                    ".jpg", array, [cv2.IMWRITE_JPEG_QUALITY, 85]
+                )
             if not encoded:
                 raise RuntimeError(f"OpenCV failed to encode image: {path}")
             return base64.b64encode(buffer.tobytes()).decode("ascii")
@@ -208,8 +230,22 @@ class RGBDImageEncoder:
         except ImportError:
             Image = None
         if Image is not None and isinstance(image, Image.Image):
+            image = image.convert("RGB") if not is_depth else image
+            if self._max_edge > 0 and max(image.size) > self._max_edge:
+                scale = self._max_edge / max(image.size)
+                image = image.resize(
+                    (
+                        max(1, round(image.width * scale)),
+                        max(1, round(image.height * scale)),
+                    ),
+                    Image.Resampling.BILINEAR,
+                )
             output = BytesIO()
-            image.convert("RGB").save(output, format="PNG")
+            image.save(
+                output,
+                format="PNG" if is_depth else "JPEG",
+                **({} if is_depth else {"quality": 85, "optimize": True}),
+            )
             return base64.b64encode(output.getvalue()).decode("ascii")
 
         try:
@@ -238,7 +274,12 @@ class RGBDImageEncoder:
                 (max(1, round(width * scale)), max(1, round(height * scale))),
                 interpolation=cv2.INTER_AREA,
             )
-        encoded, buffer = cv2.imencode(".png", array)
+        if is_depth:
+            encoded, buffer = cv2.imencode(".png", array)
+        else:
+            encoded, buffer = cv2.imencode(
+                ".jpg", array, [cv2.IMWRITE_JPEG_QUALITY, 85]
+            )
         if not encoded:
             raise RuntimeError("OpenCV failed to encode image")
         return base64.b64encode(buffer.tobytes()).decode("ascii")
@@ -303,7 +344,7 @@ class NvidiaBuildBackend:
         self._image_encoder = RGBDImageEncoder(config.image_max_edge)
 
     def load(self) -> None:
-        self._api_key()
+        self._api_keys()
 
     def unload(self) -> None:
         return None
@@ -339,7 +380,7 @@ class NvidiaBuildBackend:
             encoded_image = self._image_encoder._image_to_base64(
                 rgb_image, is_depth=False
             )
-            content.append(self._image_content(encoded_image, "image/png"))
+            content.append(self._image_content(encoded_image, "image/jpeg"))
         elif depth_image is not None:
             encoded_image = self._image_encoder._image_to_base64(
                 depth_image, is_depth=True
@@ -348,19 +389,79 @@ class NvidiaBuildBackend:
         content.append({"type": "text", "text": user_prompt})
         messages.append({"role": "user", "content": content})
 
-        response = self._post_json(
-            "/chat/completions",
-            {
-                "model": self._config.model_name_or_path,
-                "messages": messages,
-                "frequency_penalty": self._config.frequency_penalty,
-                "max_tokens": self._config.max_tokens,
-                "presence_penalty": self._config.presence_penalty,
-                "stream": False,
-                "temperature": self._config.temperature,
-                "top_p": self._config.top_p,
-            },
+        payload = {
+            "model": self._config.model_name_or_path,
+            "messages": messages,
+            "frequency_penalty": self._config.frequency_penalty,
+            "max_tokens": self._config.max_tokens,
+            "presence_penalty": self._config.presence_penalty,
+            "stream": False,
+            "temperature": self._config.temperature,
+            "top_p": self._config.top_p,
+        }
+        keys = self._api_keys()
+        if len(keys) == 1:
+            return self._response_content(
+                self._post_json("/chat/completions", payload, api_key=keys[0])
+            )
+
+        # Each key gets an independent request. The first response that has
+        # valid JSON wins; a fast 500 or malformed response is ignored.
+        stop_event = Event()
+        executor = ThreadPoolExecutor(
+            max_workers=len(keys),
+            thread_name_prefix="aura-nvidia",
         )
+        futures = {
+            executor.submit(
+                self._post_json,
+                "/chat/completions",
+                payload,
+                api_key=api_key,
+                cancel_event=stop_event,
+                timeout_sec=self._config.parallel_request_timeout_sec,
+            ): index
+            for index, api_key in enumerate(keys, start=1)
+        }
+        transient_errors: list[str] = []
+        permanent_errors: list[str] = []
+        try:
+            for future in as_completed(futures):
+                slot = futures[future]
+                try:
+                    content = self._response_content(future.result())
+                    loads_json(content)
+                except NvidiaTransientError as exc:
+                    transient_errors.append(f"key{slot}: {exc}")
+                    continue
+                except Exception as exc:
+                    permanent_errors.append(
+                        f"key{slot}: {type(exc).__name__}: {exc}"
+                    )
+                    continue
+                print(
+                    f"nvidia> concurrent NVIDIA request succeeded with key slot {slot}",
+                    flush=True,
+                )
+                stop_event.set()
+                return content
+        finally:
+            stop_event.set()
+            for future in futures:
+                future.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
+        details = "; ".join([*permanent_errors, *transient_errors])
+        if permanent_errors and not transient_errors:
+            raise RuntimeError(
+                "All concurrent NVIDIA requests were rejected or invalid: "
+                + details
+            )
+        raise NvidiaTransientError(
+            "All concurrent NVIDIA requests failed: " + details
+        )
+
+    @staticmethod
+    def _response_content(response: Mapping[str, Any]) -> str:
         choices = response.get("choices")
         if not isinstance(choices, list) or not choices:
             raise RuntimeError(f"Unexpected NVIDIA Build response: {response!r}")
@@ -379,15 +480,25 @@ class NvidiaBuildBackend:
                 return result
         raise RuntimeError(f"Unexpected NVIDIA Build response: {response!r}")
 
-    def _post_json(self, endpoint: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+    def _post_json(
+        self,
+        endpoint: str,
+        payload: Mapping[str, Any],
+        *,
+        api_key: str | None = None,
+        cancel_event: Event | None = None,
+        timeout_sec: float | None = None,
+    ) -> dict[str, Any]:
         url = f"{self._config.base_url.rstrip('/')}{endpoint}"
         result = None
         for attempt in range(max(0, self._config.max_retries) + 1):
+            if cancel_event is not None and cancel_event.is_set():
+                raise NvidiaTransientError("request superseded by another API key")
             request = Request(
                 url,
                 data=json.dumps(payload).encode("utf-8"),
                 headers={
-                    "Authorization": f"Bearer {self._api_key()}",
+                    "Authorization": f"Bearer {self._api_key(api_key)}",
                     "Accept": "application/json",
                     "Content-Type": "application/json",
                 },
@@ -395,7 +506,12 @@ class NvidiaBuildBackend:
             )
             try:
                 with urlopen(
-                    request, timeout=self._config.request_timeout_sec
+                    request,
+                    timeout=(
+                        self._config.request_timeout_sec
+                        if timeout_sec is None
+                        else float(timeout_sec)
+                    ),
                 ) as response:
                     result = json.loads(response.read().decode("utf-8"))
                 break
@@ -408,9 +524,19 @@ class NvidiaBuildBackend:
                         f"{attempt + 1}/{self._config.max_retries}...",
                         flush=True,
                     )
-                    time.sleep(self._config.retry_backoff_sec * (2**attempt))
+                    retry_delay = self._config.retry_backoff_sec * (2**attempt)
+                    if cancel_event is not None:
+                        if cancel_event.wait(retry_delay):
+                            raise NvidiaTransientError(
+                                "request superseded by another API key"
+                            )
+                    else:
+                        time.sleep(retry_delay)
                     continue
-                raise RuntimeError(f"NVIDIA Build HTTP {exc.code}: {body}") from exc
+                error_type = NvidiaTransientError if retryable else RuntimeError
+                raise error_type(
+                    f"NVIDIA Build HTTP {exc.code}: {body}"
+                ) from exc
             except (
                 URLError,
                 RemoteDisconnected,
@@ -423,9 +549,16 @@ class NvidiaBuildBackend:
                         f"{attempt + 1}/{self._config.max_retries}...",
                         flush=True,
                     )
-                    time.sleep(self._config.retry_backoff_sec * (2**attempt))
+                    retry_delay = self._config.retry_backoff_sec * (2**attempt)
+                    if cancel_event is not None:
+                        if cancel_event.wait(retry_delay):
+                            raise NvidiaTransientError(
+                                "request superseded by another API key"
+                            )
+                    else:
+                        time.sleep(retry_delay)
                     continue
-                raise RuntimeError(
+                raise NvidiaTransientError(
                     f"Cannot complete NVIDIA Build request at "
                     f"{self._config.base_url}: {type(exc).__name__}: {exc}"
                 ) from exc
@@ -435,16 +568,30 @@ class NvidiaBuildBackend:
             )
         return result
 
-    def _api_key(self) -> str:
-        api_key = (
+    def _api_keys(self) -> tuple[str, ...]:
+        configured = tuple(
+            normalized
+            for key in self._config.api_keys
+            if (normalized := _normalize_api_key(key))
+        )
+        if configured:
+            return configured
+        fallback = _normalize_api_key(
             self._config.api_key or os.getenv("NVIDIA_API_KEY", "")
-        ).strip()
-        if not api_key:
-            raise RuntimeError(
-                "NVIDIA_API_KEY is not set. Generate a key at build.nvidia.com "
-                "and export it before starting AuraVLA."
-            )
-        return api_key
+        )
+        if fallback:
+            return (fallback,)
+        raise RuntimeError(
+            "NVIDIA_API_KEY is not set. Generate a key at build.nvidia.com "
+            "and export it before starting AuraVLA."
+        )
+
+    def _api_key(self, api_key: str | None = None) -> str:
+        if api_key:
+            normalized = _normalize_api_key(api_key)
+            if normalized:
+                return normalized
+        return self._api_keys()[0]
 
     @staticmethod
     def _image_content(encoded_image: str, media_type: str) -> dict[str, Any]:
@@ -462,10 +609,12 @@ class NvidiaVLAgent:
         config: NvidiaConfig | None = None,
         backend: VLMBackend | None = None,
         scene_name_resolver: SceneNameResolver | None = None,
+        fallback_tasks: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> None:
         self.config = config or NvidiaConfig()
         self._backend = backend or NvidiaBuildBackend(self.config)
         self._scene_name_resolver = scene_name_resolver or SceneNameResolver.from_mapping()
+        self._fallback_tasks = self._normalize_fallback_tasks(fallback_tasks or {})
         self._history: list[dict[str, str]] = []
 
     def load(self) -> None:
@@ -488,8 +637,7 @@ class NvidiaVLAgent:
         scene_inspection = _is_scene_inspection_message(instruction)
         context = loads_json(context_json) if context_json else {}
         image_description = (
-            "One RGBD composite is attached: RGB is above a colored depth strip, "
-            "where warmer colors indicate nearer pixels."
+            "One current RGB scene image is attached."
             if rgb_image is not None
             else "No scene image is attached. Do not assume that any object or container is visible."
         )
@@ -503,14 +651,24 @@ class NvidiaVLAgent:
             alias_hints = self._scene_name_resolver.build_alias_hints()
             if alias_hints:
                 system_prompt = system_prompt + "\n\n" + alias_hints
-        raw_response = self._backend.generate(
-            system_prompt,
-            user_prompt,
-            rgb_image,
-            None if scene_inspection else depth_image,
-            history=() if scene_inspection else self._history,
-        )
-        response = loads_json(raw_response)
+        try:
+            raw_response = self._backend.generate(
+                system_prompt,
+                user_prompt,
+                rgb_image,
+                None,
+                history=() if scene_inspection else self._history,
+            )
+        except NvidiaTransientError:
+            response = self._fallback_task_response(instruction)
+            if response is None:
+                raise
+            print(
+                "nvidia> NVIDIA service unavailable; using configured semantic task route",
+                flush=True,
+            )
+        else:
+            response = loads_json(raw_response)
         if scene_inspection:
             response = _normalize_scene_inventory(response)
         else:
@@ -537,6 +695,55 @@ class NvidiaVLAgent:
         else:
             self._history.clear()
         return response_json
+
+    @staticmethod
+    def _normalize_instruction(value: Any) -> str:
+        return "".join(str(value or "").strip().lower().split()).strip(
+            "!?.,。！？"
+        )
+
+    def _normalize_fallback_tasks(
+        self,
+        configured: Mapping[str, Mapping[str, Any]],
+    ) -> dict[str, dict[str, str]]:
+        routes: dict[str, dict[str, str]] = {}
+        for instruction, task in configured.items():
+            if not isinstance(task, Mapping):
+                raise ValueError(
+                    f"agent.fallback_tasks[{instruction!r}] must be an object"
+                )
+            object_name = self._scene_name_resolver.canonicalize(
+                task.get("object_name")
+            )
+            target_name = self._scene_name_resolver.canonicalize(
+                task.get("target_name")
+            )
+            normalized_instruction = self._normalize_instruction(instruction)
+            if not normalized_instruction or not object_name or not target_name:
+                raise ValueError(
+                    f"agent.fallback_tasks[{instruction!r}] requires object_name and target_name"
+                )
+            routes[normalized_instruction] = {
+                "object_name": object_name,
+                "target_name": target_name,
+            }
+        return routes
+
+    def _fallback_task_response(
+        self,
+        instruction: str,
+    ) -> dict[str, Any] | None:
+        route = self._fallback_tasks.get(self._normalize_instruction(instruction))
+        if route is None:
+            return None
+        return {
+            "schema_version": "1.0",
+            "doable": True,
+            "task": "pick_and_place",
+            "target_objects": [route["object_name"]],
+            "target_container": route["target_name"],
+            "inference_source": "configured_transient_fallback",
+        }
 
     def chat(
         self,
@@ -581,6 +788,25 @@ def _normalize_api_key(api_key: str | None) -> str | None:
     return normalized or None
 
 
+def _normalize_api_keys(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        candidates = re.split(r"[,;\n]+", value)
+    elif isinstance(value, Sequence):
+        candidates = list(value)
+    else:
+        raise ValueError("nvidia.api_keys must be a YAML list or comma-separated string")
+    normalized = []
+    for candidate in candidates:
+        key = _normalize_api_key(str(candidate))
+        if key and key not in normalized:
+            normalized.append(key)
+    if len(normalized) > 3:
+        raise ValueError("nvidia.api_keys supports at most three concurrent keys")
+    return tuple(normalized)
+
+
 def _config_section(settings: Mapping[str, Any], name: str) -> Mapping[str, Any]:
     section = settings.get(name, {})
     if not isinstance(section, Mapping):
@@ -605,6 +831,7 @@ def main(argv: list[str] | None = None) -> int:
     scene_settings = _config_section(settings, "scene")
     agent_settings = _config_section(settings, "agent")
     quick_commands = dict(agent_settings.get("quick_commands") or {})
+    fallback_tasks = dict(agent_settings.get("fallback_tasks") or {})
 
     parser = argparse.ArgumentParser(
         description="Run the AuraVLA NVIDIA vision-language DACH robot task agent."
@@ -711,12 +938,14 @@ def main(argv: list[str] | None = None) -> int:
         model_name_or_path=args.model,
         base_url=args.nvidia_url,
         api_key=base_config.api_key,
+        api_keys=base_config.api_keys,
         max_tokens=base_config.max_tokens,
         temperature=base_config.temperature,
         top_p=base_config.top_p,
         frequency_penalty=base_config.frequency_penalty,
         presence_penalty=base_config.presence_penalty,
         request_timeout_sec=base_config.request_timeout_sec,
+        parallel_request_timeout_sec=base_config.parallel_request_timeout_sec,
         max_retries=base_config.max_retries,
         retry_backoff_sec=base_config.retry_backoff_sec,
         image_max_edge=args.image_max_edge,
@@ -725,6 +954,7 @@ def main(argv: list[str] | None = None) -> int:
     agent = NvidiaVLAgent(
         config=config,
         scene_name_resolver=SceneNameResolver.from_mapping(scene_settings),
+        fallback_tasks=fallback_tasks,
     )
     if args.load_only:
         try:
@@ -928,10 +1158,13 @@ def _run_chat_loop(
                 print("nvidia> Isaac camera bridge restored with a fresh frame")
         try:
             print("nvidia> inferring...", flush=True)
+            inference_started = time.perf_counter()
             response_json = agent.chat(message, current_rgb, current_depth)
         except Exception as exc:
             print(f"nvidia> ERROR: {exc}")
             continue
+        inference_duration = time.perf_counter() - inference_started
+        print(f"nvidia> inference completed in {inference_duration:.2f}s")
         print(f"nvidia> {response_json}")
         if task_client is not None:
             try:

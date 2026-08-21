@@ -72,8 +72,9 @@ def _load_aura_runtime_config() -> None:
     set_value("AURA_BASKET_RESET_POSITION_JSON", json.dumps(basket.get("reset_position")))
     set_value("AURA_BASKET_RESET_ORIENTATION_JSON", json.dumps(basket.get("reset_orientation")))
 
-    # Values from AuraVLA config.yaml take precedence over module defaults,
-    # take precedence over module defaults, while explicit shell overrides win.
+    # The VS Code executor is a long-lived process. Reapply every value present
+    # in Aura config so a hot reload cannot retain stale grasp physics from an
+    # earlier run.
     config_env = {
         "AURA_DACH_GRASP_HEIGHT_OFFSET": ("grasp_height_offset", 0.020),
         "AURA_DACH_GRASP_YAW_OFFSET_DEG": ("grasp_yaw_offset_deg", 0.0),
@@ -97,7 +98,7 @@ def _load_aura_runtime_config() -> None:
         "AURA_BANANA_DYNAMIC_FRICTION": ("banana_dynamic_friction", 1.0),
         "AURA_GRIPPER_STATIC_FRICTION": ("gripper_static_friction", 6.0),
         "AURA_GRIPPER_DYNAMIC_FRICTION": ("gripper_dynamic_friction", 5.0),
-        "AURA_PHYSX_CONTACT_OFFSET": ("physx_contact_offset_m", 0.02),
+        "AURA_PHYSX_CONTACT_OFFSET": ("physx_contact_offset_m", 0.003),
         "AURA_PHYSX_REST_OFFSET": ("physx_rest_offset_m", 0.001),
         "AURA_PHYSX_SOLVER_POSITION_ITERATIONS": ("physx_solver_position_iterations", 32),
         "AURA_PHYSX_SOLVER_VELOCITY_ITERATIONS": ("physx_solver_velocity_iterations", 8),
@@ -118,37 +119,19 @@ def _load_aura_runtime_config() -> None:
         "AURA_TRAJECTORY_SETTLE_FRAMES": ("trajectory_settle_frames", 12),
         "AURA_GRASP_APPROACH_MAX_JOINT_STEP": ("grasp_approach_max_joint_step_rad", 0.018),
         "AURA_GRASP_APPROACH_MIN_FRAMES": ("grasp_approach_min_frames", 24),
+        "AURA_GRASP_LIFT_MAX_JOINT_STEP": ("grasp_lift_max_joint_step_rad", 0.008),
+        "AURA_GRASP_LIFT_MIN_FRAMES": ("grasp_lift_min_frames", 150),
         "AURA_CARTESIAN_WAYPOINT_SPACING": ("cartesian_waypoint_spacing_m", 0.04),
-        "AURA_TRANSPORT_LIFT_HEIGHT": ("transport_lift_height_m", 0.32),
+        "AURA_TRANSPORT_LIFT_HEIGHT": ("transport_lift_height_m", 0.16),
         "AURA_CARRY_CARTESIAN_WAYPOINT_SPACING": ("carry_cartesian_waypoint_spacing_m", 0.12),
         "AURA_GRASP_REFINEMENT_STEPS": ("grasp_refinement_steps", 0),
         "AURA_CARRY_APEX_CLEARANCE": ("carry_apex_clearance_m", 0.15),
         "AURA_DUAL_ARM_MIN_TCP_SEPARATION": ("dual_arm_min_tcp_separation_m", 0.18),
-        "AURA_ALLOW_OVERSIZED_CAN_GRASP": ("allow_oversized_can_grasp", False),
-        "AURA_LARGE_CAN_USE_SIMULATED_ATTACHMENT": (
-            "large_can_use_simulated_attachment", False
-        ),
-        "AURA_LARGE_CAN_CLOSED_JAW_CLEARANCE_LIFT": (
-            "large_can_closed_jaw_clearance_lift_m", 0.0
-        ),
-        "AURA_LARGE_CAN_POST_CLOSE_MAX_CORRECTION": (
-            "large_can_post_close_max_correction_m", 0.04
-        ),
         "AURA_GRASPNET_REQUIRED": ("graspnet_required", True),
     }
     for env_name, (key, default) in config_env.items():
-        if env_name not in os.environ and key in robot:
-            set_value(env_name, robot.get(key, default))
-    # These switches change the physical meaning of a grasp.  A VS Code
-    # hot-reload reuses the Isaac process environment, so an old value from a
-    # previous runtime must not silently override the current Aura config.
-    for env_name, key in (
-        ("AURA_ALLOW_OVERSIZED_CAN_GRASP", "allow_oversized_can_grasp"),
-        ("AURA_LARGE_CAN_USE_SIMULATED_ATTACHMENT", "large_can_use_simulated_attachment"),
-    ):
         if key in robot:
-            set_value(env_name, robot[key])
-    set_value("AURA_BANANA_USE_SIMULATED_ATTACHMENT", str(bool(robot.get("banana_use_simulated_attachment", True))).lower())
+            set_value(env_name, robot.get(key, default))
     set_value("AURA_USE_GRASPNET", str(bool(robot.get("use_graspnet", True))).lower())
     set_value("AURA_USE_GRASPNET_ORIENTATION", str(bool(robot.get("use_graspnet_orientation", False))).lower())
     set_value("AURA_PHYSX_ENABLE_CCD", str(bool(robot.get("physx_enable_ccd", False))).lower())
@@ -191,7 +174,6 @@ from aura_isaac_bridge.core.state import (
     BANANA_GRASP_TILT_RAD, BANANA_NEAR_SIDE_OFFSET, BANANA_MIN_SHORT_AXIS_ALIGNMENT,
     GRASP_POSITION_OFFSET, GRASP_INSERT_DEPTH,
     MAX_GRASP_APPROACH_TILT_RAD, TARGET_GRASP_APPROACH_TILT_RAD,
-    BANANA_USE_SIMULATED_ATTACHMENT, ALLOW_OVERSIZED_CAN_GRASP,
     GRASP_REFINEMENT_STEPS,
     BANANA_GRIPPER_CLOSE_POSITION, BANANA_PLANAR_REFINEMENT_STEPS,
     BANANA_PLANAR_CENTER_TOLERANCE, BANANA_MAX_PLANAR_CORRECTION,
@@ -225,7 +207,7 @@ from aura_isaac_bridge.core.physics import (
     create_grasp_physics_material, bind_grasp_physics_material,
     ensure_pickable_object, get_dach_finger_paths,
     prepare_dach_finger_collision_instances, configure_dach_contact_physics,
-    configure_physics_scene,
+    configure_physics_scene, configure_static_contact_offsets,
 )
 from aura_isaac_bridge.core.perception import (
     get_bbox_center,
@@ -246,9 +228,7 @@ from aura_isaac_bridge.core.motion import (
     get_gripper_collision_center, get_gripper_collision_diagnostics,
     get_gripper_table_clearance, get_gripper_closing_axis,
     get_gripper_center_local_offset, get_tcp_target_for_gripper_center,
-    freeze_object_for_pregrasp, release_pregrasp_object,
-    attach_simulated_object, update_simulated_attachment,
-    detach_simulated_object,
+    clear_legacy_grasp_joints,
     get_active_joint_positions, get_left_joint_positions,
     ensure_robot_control_ready, get_rmp_ee_position,
     move_ee_to, move_ee_waypoints, move_ee_smooth,
@@ -549,12 +529,7 @@ elif (
     print("🏠 首次初始化关节状态无效，已使用双臂 HOME 姿态")
 else:
     print("🏠 保留场景中的双臂当前姿态，未执行 HOME 归位")
-# A hot reload normally preserves the live jaw pose. In Isaac-only oversized
-# can mode, that would preserve the old 77 mm opening and defeat the new limit.
-if ALLOW_OVERSIZED_CAN_GRASP:
-    state.dach_left.gripper.teleport_joint_positions(state.GRIPPER_OPEN_POSITIONS)
-    state.dach_right.gripper.teleport_joint_positions(state.GRIPPER_OPEN_POSITIONS)
-    print("👐 Isaac oversized-can mode: both grippers reset to the extended opening")
+clear_legacy_grasp_joints()
 # Both fresh initialization and hot reload must expose the configured arm
 # before contact gains are applied. The previous value can be stale or empty
 # when the VS Code executor reuses the module globals.
@@ -633,9 +608,11 @@ if state.controller.rrt is not None:
     if stage.GetPrimAtPath(planning_proxy_path).IsValid():
         delete_prim(planning_proxy_path)
         get_app().update()
+    table_prim_path = "/SimpleRoom/table_low_327"
+    configure_static_contact_offsets(stage, table_prim_path)
     table_center, table_min, table_max = get_bbox_center(
         stage,
-        "/SimpleRoom/table_low_327",
+        table_prim_path,
     )
     state.planning_table_surface_z = float(table_max[2])
     planning_table_min = np.asarray(table_min, dtype=float)
@@ -812,9 +789,10 @@ print("✅ Task Bridge 已启动")
 try:
     print(
         "✅ Aura 夹爪配置: "
-        f"allow_oversized={os.environ.get('AURA_ALLOW_OVERSIZED_CAN_GRASP')}, "
         f"open_target={state.GRIPPER_OPEN_POSITIONS.tolist()}, "
-        f"active_jaw={state.dach_arm.gripper.get_joint_positions().tolist()}"
+        f"active_jaw={state.dach_arm.gripper.get_joint_positions().tolist()}, "
+        f"contact_offset={PHYSX_CONTACT_OFFSET:.4f} m, "
+        f"rest_offset={PHYSX_REST_OFFSET:.4f} m"
     )
 except Exception as exc:
     print(f"⚠️ 无法读取 Aura 夹爪诊断: {exc}")

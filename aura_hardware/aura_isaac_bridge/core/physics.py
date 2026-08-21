@@ -185,6 +185,9 @@ def ensure_pickable_object(stage, prim_path):
         print(f"✅ 已给 {prim_path} root 添加 RigidBodyAPI")
     else:
         print(f"✅ {prim_path} root 已有 RigidBodyAPI")
+    # Every grasp starts from a dynamic object. This also clears the kinematic
+    # state left by an older runtime that froze the object before jaw closure.
+    UsdPhysics.RigidBodyAPI(root).CreateKinematicEnabledAttr().Set(False)
 
     # 适当增加质量和阻尼，减少搬运时因接触/惯性产生的晃动。
     mass_api = UsdPhysics.MassAPI(root) if root.HasAPI(UsdPhysics.MassAPI) else UsdPhysics.MassAPI.Apply(root)
@@ -255,6 +258,37 @@ def ensure_pickable_object(stage, prim_path):
         f"mass=0.05kg, CCD={'on' if PHYSX_ENABLE_CCD else 'off'}, contact/rest="
         f"{PHYSX_CONTACT_OFFSET:.4f}/{PHYSX_REST_OFFSET:.4f}m"
     )
+
+
+def configure_static_contact_offsets(stage, prim_path):
+    """Keep static support surfaces on the same contact shell as the gripper."""
+    root = stage.GetPrimAtPath(prim_path)
+    if not root.IsValid():
+        raise RuntimeError(f"{prim_path} 不存在，无法配置静态碰撞接触距离")
+
+    configured = 0
+    for prim in Usd.PrimRange(root):
+        if not prim.HasAPI(UsdPhysics.CollisionAPI):
+            continue
+        collision_enabled = UsdPhysics.CollisionAPI(
+            prim
+        ).GetCollisionEnabledAttr().Get()
+        if collision_enabled is False:
+            continue
+        collision_api = (
+            PhysxSchema.PhysxCollisionAPI(prim)
+            if prim.HasAPI(PhysxSchema.PhysxCollisionAPI)
+            else PhysxSchema.PhysxCollisionAPI.Apply(prim)
+        )
+        collision_api.CreateContactOffsetAttr().Set(PHYSX_CONTACT_OFFSET)
+        collision_api.CreateRestOffsetAttr().Set(PHYSX_REST_OFFSET)
+        configured += 1
+
+    print(
+        f"✅ {prim_path} 静态碰撞接触距离已同步: colliders={configured}, "
+        f"contact/rest={PHYSX_CONTACT_OFFSET:.4f}/{PHYSX_REST_OFFSET:.4f}m"
+    )
+    return configured
 
 
 def get_dach_finger_paths():

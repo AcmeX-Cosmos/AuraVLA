@@ -21,12 +21,12 @@ class VLMConfig:
     model: str = "nvidia/nemotron-nano-12b-v2-vl"
     base_url: str = "https://integrate.api.nvidia.com/v1"
     api_key: str = ""
-    max_tokens: int = 4096
+    max_tokens: int = 768
     temperature: float = 0.2
     top_p: float = 0.9
     request_timeout_sec: float = 300.0
-    max_retries: int = 3
-    image_max_edge: int = 640
+    max_retries: int = 1
+    image_max_edge: int = 448
 
 
 class VLMClient(ABC):
@@ -148,7 +148,7 @@ class NvidiaVLMClient(VLMClient):
 
             # Convert to base64
             buffer = BytesIO()
-            img.save(buffer, format='JPEG', quality=95)
+            img.convert('RGB').save(buffer, format='JPEG', quality=85, optimize=True)
             return base64.b64encode(buffer.getvalue()).decode('utf-8')
 
         except ImportError:

@@ -1,19 +1,25 @@
 nvidia:
-  api_key: "Bearer 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"
+  # api_key: "Bearer nvapi-"
+  # Add up to three independent NVIDIA keys here. When non-empty, the agent
+  # sends one copy of each request concurrently and keeps the first valid JSON.
+  # Prefer environment variables for keys in shared repositories.
+  api_keys: []
+
   model: "nvidia/nemotron-nano-12b-v2-vl"
   base_url: "https://integrate.api.nvidia.com/v1"
   request_timeout_sec: 300
-  max_retries: 3
-  retry_backoff_sec: 1
-  max_tokens: 4096
+  parallel_request_timeout_sec: 60
+  max_retries: 2
+  retry_backoff_sec: 0.75
+  max_tokens: 768
   temperature: 0.2
   top_p: 0.9
   frequency_penalty: 0.0
   presence_penalty: 0.0
 
 agent:
-  image_max_edge: 640
-  max_history_messages: 6
+  image_max_edge: 448
+  max_history_messages: 2
   quick_commands:
     "1": "把香蕉放进篮子里"
     "2": "把杯子放进篮子里"
@@ -22,6 +28,13 @@ agent:
     "5": "/reload"
     "6": "/camera"
     "7": "现在画面中有什么物体"
+  # Used only after retryable NVIDIA 429/5xx or connection failures. These
+  # semantic routes still pass through TaskPlanner, GraspNet, and Isaac safety.
+  fallback_tasks:
+    "把香蕉放进篮子里": {object_name: banana, target_name: basket}
+    "把杯子放进篮子里": {object_name: mug, target_name: basket}
+    "把蓝色罐头放进篮子里": {object_name: master_chef_can, target_name: basket}
+    "把红白罐头放进篮子里": {object_name: tomato_soup_can, target_name: basket}
 
 runtime:
   chat: true
@@ -70,21 +83,11 @@ robot:
   grasp_clearance_guard_pad_m: 0.0005
   max_grasp_approach_tilt_deg: 15.0
   target_grasp_approach_tilt_deg: 10.0
-  banana_use_simulated_attachment: true
   # GraspNet is mandatory for all grasp actions. There is no scene-geometry
   # fallback when the model or its checkpoint is unavailable.
   graspnet_required: true
   use_graspnet: true
   use_graspnet_orientation: true
-  # Isaac-only demonstration mode for the 102 mm MasterChef can. The
-  # calibrated physical gripper opening is about 80 mm, so keep this false
-  # for hardware-valid experiments.
-  allow_oversized_can_grasp: false
-  large_can_use_simulated_attachment: false
-  # Only used when an Isaac oversized-can experiment is explicitly enabled.
-  # It is inactive in the default physical-grasp configuration above.
-  large_can_closed_jaw_clearance_lift_m: 0.012
-  large_can_post_close_max_correction_m: 0.04
   gripper_close_frames: 120
   gripper_max_effort_n: 16.0
   gripper_stiffness: 500.0
@@ -103,7 +106,9 @@ robot:
   banana_planar_refinement_steps: 3
   banana_planar_center_tolerance_m: 0.008
   banana_max_planar_correction_m: 0.05
-  physx_contact_offset_m: 0.02
+  # Keep contact generation close to the visible collider. A 20 mm margin
+  # reports jaw contact long before the fingers visually touch the object.
+  physx_contact_offset_m: 0.003
   physx_rest_offset_m: 0.001
   physx_solver_position_iterations: 32
   physx_solver_velocity_iterations: 8
@@ -121,6 +126,10 @@ robot:
   trajectory_settle_frames: 3
   grasp_approach_max_joint_step_rad: 0.009
   grasp_approach_min_frames: 30
+  # A free rigid body needs a low-acceleration lift after contact. The old
+  # five-frame motion was only stable while S5 used an attachment joint.
+  grasp_lift_max_joint_step_rad: 0.008
+  grasp_lift_min_frames: 150
   action_waypoint_limit: 3
   cartesian_waypoint_spacing_m: 0.04
   transport_lift_height_m: 0.16

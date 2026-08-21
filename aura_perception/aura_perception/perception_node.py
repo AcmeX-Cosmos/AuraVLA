@@ -134,15 +134,15 @@ class PerceptionNode(Node):
                 'model': 'nvidia/nemotron-nano-12b-v2-vl',
                 'base_url': 'https://integrate.api.nvidia.com/v1',
                 'api_key': '',
-                'max_tokens': 4096,
+                'max_tokens': 768,
                 'temperature': 0.2,
                 'top_p': 0.9,
                 'request_timeout_sec': 300.0,
-                'max_retries': 3
+                'max_retries': 1
             },
             'agent': {
-                'image_max_edge': 640,
-                'max_history_messages': 6
+                'image_max_edge': 448,
+                'max_history_messages': 2
             },
             'scene': {
                 'canonical_names': {}

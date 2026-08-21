@@ -125,29 +125,6 @@ GRASPNET_CALIBRATION_MAX_CORRECTION = max(
 
 MAX_GRASP_APPROACH_TILT_RAD = np.radians(float(os.environ.get("AURA_MAX_GRASP_APPROACH_TILT_DEG", "60.0")))
 TARGET_GRASP_APPROACH_TILT_RAD = np.radians(float(os.environ.get("AURA_TARGET_GRASP_APPROACH_TILT_DEG", "55.0")))
-BANANA_USE_SIMULATED_ATTACHMENT = os.environ.get("AURA_BANANA_USE_SIMULATED_ATTACHMENT", "true").strip().lower() in {"1", "true", "yes", "on"}
-ALLOW_OVERSIZED_CAN_GRASP = os.environ.get(
-    "AURA_ALLOW_OVERSIZED_CAN_GRASP", "false"
-).strip().lower() in {"1", "true", "yes", "on"}
-LARGE_CAN_USE_SIMULATED_ATTACHMENT = os.environ.get(
-    "AURA_LARGE_CAN_USE_SIMULATED_ATTACHMENT", "false"
-).strip().lower() in {"1", "true", "yes", "on"}
-LARGE_CAN_CLOSED_JAW_CLEARANCE_LIFT = max(
-    float(
-        os.environ.get(
-            "AURA_LARGE_CAN_CLOSED_JAW_CLEARANCE_LIFT", "0.0"
-        )
-    ),
-    0.0,
-)
-LARGE_CAN_POST_CLOSE_MAX_CORRECTION = max(
-    float(
-        os.environ.get(
-            "AURA_LARGE_CAN_POST_CLOSE_MAX_CORRECTION", "0.04"
-        )
-    ),
-    0.0,
-)
 GRASP_REFINEMENT_STEPS = max(int(os.environ.get("AURA_GRASP_REFINEMENT_STEPS", "0")), 0)
 BANANA_GRIPPER_CLOSE_POSITION = float(os.environ.get("AURA_BANANA_GRIPPER_CLOSE_POSITION", "0.0"))
 BANANA_PLANAR_REFINEMENT_STEPS = max(int(os.environ.get("AURA_BANANA_PLANAR_REFINEMENT_STEPS", "2")), 0)
@@ -179,11 +156,17 @@ TRAJECTORY_MIN_FRAMES = max(int(os.environ.get("AURA_TRAJECTORY_MIN_FRAMES", "6"
 TRAJECTORY_SETTLE_FRAMES = max(int(os.environ.get("AURA_TRAJECTORY_SETTLE_FRAMES", "4")), 0)
 GRASP_APPROACH_MAX_JOINT_STEP = max(float(os.environ.get("AURA_GRASP_APPROACH_MAX_JOINT_STEP", "0.018")), 0.001)
 GRASP_APPROACH_MIN_FRAMES = max(int(os.environ.get("AURA_GRASP_APPROACH_MIN_FRAMES", "24")), 4)
+GRASP_LIFT_MAX_JOINT_STEP = max(
+    float(os.environ.get("AURA_GRASP_LIFT_MAX_JOINT_STEP", "0.008")), 0.001
+)
+GRASP_LIFT_MIN_FRAMES = max(
+    int(os.environ.get("AURA_GRASP_LIFT_MIN_FRAMES", "150")), 30
+)
 ACTION_WAYPOINT_LIMIT = max(int(os.environ.get("AURA_ACTION_WAYPOINT_LIMIT", "3")), 1)
 CARTESIAN_WAYPOINT_SPACING = max(float(os.environ.get("AURA_CARTESIAN_WAYPOINT_SPACING", "0.04")), 0.01)
 CARRY_APEX_CLEARANCE = float(os.environ.get("AURA_CARRY_APEX_CLEARANCE", "0.15"))
 TRANSPORT_LIFT_HEIGHT = max(
-    float(os.environ.get("AURA_TRANSPORT_LIFT_HEIGHT", "0.32")),
+    float(os.environ.get("AURA_TRANSPORT_LIFT_HEIGHT", "0.16")),
     0.08,
 )
 CARRY_CARTESIAN_WAYPOINT_SPACING = max(
@@ -214,7 +197,7 @@ BANANA_STATIC_FRICTION = float(os.environ.get("AURA_BANANA_STATIC_FRICTION", "1.
 BANANA_DYNAMIC_FRICTION = float(os.environ.get("AURA_BANANA_DYNAMIC_FRICTION", "1.0"))
 GRIPPER_STATIC_FRICTION = float(os.environ.get("AURA_GRIPPER_STATIC_FRICTION", "6.0"))
 GRIPPER_DYNAMIC_FRICTION = float(os.environ.get("AURA_GRIPPER_DYNAMIC_FRICTION", "5.0"))
-PHYSX_CONTACT_OFFSET = float(os.environ.get("AURA_PHYSX_CONTACT_OFFSET", "0.02"))
+PHYSX_CONTACT_OFFSET = float(os.environ.get("AURA_PHYSX_CONTACT_OFFSET", "0.003"))
 PHYSX_REST_OFFSET = float(os.environ.get("AURA_PHYSX_REST_OFFSET", "0.001"))
 PHYSX_SOLVER_POSITION_ITERATIONS = int(os.environ.get("AURA_PHYSX_SOLVER_POSITION_ITERATIONS", "32"))
 PHYSX_SOLVER_VELOCITY_ITERATIONS = int(os.environ.get("AURA_PHYSX_SOLVER_VELOCITY_ITERATIONS", "8"))
@@ -263,8 +246,6 @@ state = SimpleNamespace(
     planning_table_surface_z=None,
     planning_basket_obstacle=None,
     planning_basket_obstacle_enabled=False,
-    _pregrasp_frozen_prim_path=None,
-    _simulated_attachment=None,
     _graspnet_demo=None,
     _graspnet_imported=False,
     _camera_preview_window=None,

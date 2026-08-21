@@ -16,12 +16,12 @@ perception:
     model: "nvidia/nemotron-nano-12b-v2-vl"
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: "${NVIDIA_API_KEY}"
-    max_tokens: 4096
+    max_tokens: 768
     temperature: 0.2
     request_timeout_sec: 300.0
 
   image:
-    max_edge: 640
+    max_edge: 448
 
 # Planning
 planning:
