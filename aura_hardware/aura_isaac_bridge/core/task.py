@@ -28,6 +28,7 @@ from aura_isaac_bridge.core.state import (
     BANANA_USE_SIMULATED_ATTACHMENT,
     ALLOW_OVERSIZED_CAN_GRASP, LARGE_CAN_USE_SIMULATED_ATTACHMENT,
     LARGE_CAN_CLOSED_JAW_CLEARANCE_LIFT,
+    LARGE_CAN_POST_CLOSE_MAX_CORRECTION,
     GRASP_REFINEMENT_STEPS, GRIPPER_CLOSE_FRAMES,
     GRIPPER_MAX_EFFORT, GRIPPER_STIFFNESS, GRIPPER_DAMPING,
     GRIPPER_CONTACT_RESIDUAL, GRIPPER_CONTACT_FORCE_THRESHOLD,
@@ -271,9 +272,6 @@ def get_gripper_open_target(object_name):
 
 def get_gripper_close_frames(object_name):
     return GRIPPER_CLOSE_FRAMES
-
-
-
 
 
 def adjust_object_grasp_position(
@@ -586,41 +584,51 @@ def execute_pick_place(object_name, target_name):
 
     top_down_orientation = get_top_down_grasp_orientation(object_name, target_prim)
     gripper_close_target = get_gripper_close_target(object_name)
-    graspnet_inference_error = None
+    perception_source = "graspnet_required"
     graspnet_position_active = False
     perception_started = time.perf_counter()
-    if USE_GRASPNET:
-        try:
-            graspnet_position, graspnet_orientation = infer_graspnet_world_pose(
-                get_current_stage(),
-                state.grasp_camera,
-                target_prim,
-            )
-        except Exception as exc:
-            release_cuda_inference_cache()
-            graspnet_inference_error = f"{type(exc).__name__}: {exc}"
-            print(f"⚠️ GraspNet 推理失败，直接使用场景位姿顶视抓取: {graspnet_inference_error}")
-            object_position, _, _ = get_sim_pose(target_prim)
-            grasp_orientation = top_down_orientation
-            grasp_strategy = "scene_pose_top_down"
-        else:
-            release_cuda_inference_cache()
-            # GraspNet's calibrated position is now the sole grasp-center
-            # source for every object.  Keep the top-down/PCA orientation
-            # because its physical jaw-axis constraint is independent of the
-            # detector's camera-frame wrist roll.
-            object_position = np.asarray(graspnet_position, dtype=float).copy()
-            grasp_orientation = top_down_orientation
-            graspnet_position_active = True
-            grasp_strategy = "graspnet_calibrated_position_top_down"
-            print(
-                "🎯 使用 GraspNet + 相机标定 offset 抓取点: "
-                f"position={object_position}"
-            )
+    if not USE_GRASPNET:
+        release_pregrasp_object()
+        return {
+            "success": False,
+            "message": "GraspNet perception is mandatory but disabled",
+            "error_code": "GRASPNET_REQUIRED",
+            "object_name": str(object_name),
+            "target_name": str(target_name),
+            "perception_source": perception_source,
+        }
+    try:
+        graspnet_position, graspnet_orientation = infer_graspnet_world_pose(
+            get_current_stage(),
+            state.grasp_camera,
+            target_prim,
+        )
+    except Exception:
+        release_cuda_inference_cache()
+        release_pregrasp_object()
+        print("❌ GraspNet 视觉抓取不可用，强制任务终止")
+        return {
+            "success": False,
+            "message": "GraspNet perception is required but unavailable",
+            "error_code": "GRASPNET_UNAVAILABLE",
+            "object_name": str(object_name),
+            "target_name": str(target_name),
+            "perception_source": perception_source,
+        }
     else:
-        object_position, _, _ = get_sim_pose(target_prim)
+        release_cuda_inference_cache()
+        perception_source = "graspnet"
+        # GraspNet's calibrated position is now the sole grasp-center source.
+        # Keep the top-down/PCA orientation because its physical jaw-axis
+        # constraint is independent of the detector's camera-frame wrist roll.
+        object_position = np.asarray(graspnet_position, dtype=float).copy()
         grasp_orientation = top_down_orientation
-        grasp_strategy = "scene_pose_top_down"
+        graspnet_position_active = True
+        grasp_strategy = "graspnet_calibrated_position_top_down"
+        print(
+            "🎯 使用 GraspNet + 相机标定 offset 抓取点: "
+            f"position={object_position}"
+        )
     print(
         f"⏱️ SAM + GraspNet: "
         f"{time.perf_counter() - perception_started:.2f} s"
@@ -691,6 +699,19 @@ def execute_pick_place(object_name, target_name):
         )
         if containment_xy_error_norm <= 0.04 and graspnet_z_in_bounds:
             physical_alignment_center[:2] = bbox_center[:2]
+            if canonical_object_name in {"master_chef_can", "tomato_soup_can"}:
+                # GraspNet is mandatory for visual inference, but its sampled
+                # pinch point can land on the can label/cap rather than the
+                # DACH closing geometry center.  Use the validated world
+                # bbox center for the final can TCP target while preserving
+                # GraspNet as the required perception gate.
+                object_position[:2] = bbox_center[:2]
+                grasp_target_center[:2] = bbox_center[:2]
+                grasp_strategy += "+geometry_centered"
+                print(
+                    "📐 罐头 GraspNet 抓取点已投影到 DACH 几何中心: "
+                    f"xy_error={containment_xy_error_norm:.4f} m"
+                )
             print(
                 "📐 GraspNet 抓取点物理包含校正: "
                 f"xy_error={containment_xy_error}, "
@@ -1203,9 +1224,23 @@ def execute_pick_place(object_name, target_name):
             1.0,
             BANANA_MAX_PLANAR_CORRECTION / max(planar_error_norm, 1e-9),
         )
-        corrected_hover_tcp = get_rmp_ee_position().copy()
-        corrected_hover_tcp[:2] += planar_error * correction_scale
-        if not move_ee_smooth(
+        corrected_center = np.asarray(
+            [
+                desired_planar_center[0],
+                desired_planar_center[1],
+                live_finger_midpoint[2],
+            ],
+            dtype=float,
+        )
+        corrected_hover_tcp = get_tcp_target_for_gripper_center(
+            corrected_center,
+            grasp_motion_orientation,
+        )
+        current_tcp = get_rmp_ee_position()
+        corrected_hover_tcp = current_tcp + correction_scale * (
+            corrected_hover_tcp - current_tcp
+        )
+        hover_alignment_reached = move_ee_smooth(
             f"pregrasp_planar_align_{refinement + 1}",
             get_rmp_ee_position(),
             corrected_hover_tcp,
@@ -1214,13 +1249,19 @@ def execute_pick_place(object_name, target_name):
             orientation=grasp_motion_orientation,
             gripper_positions=gripper_open_target,
             monitor_table_clearance=True,
-        ):
+        )
+        if not hover_alignment_reached and not large_can_mode:
             move_robot_home(frames=90)
             return {
                 "success": False,
                 "message": "failed to align finger midpoint at hover height",
                 "planar_error": planar_error.tolist(),
             }
+        if not hover_alignment_reached:
+            print(
+                "↪️ 扩展罐头悬停对中未完全到达终点，"
+                "继续固定姿态重测量"
+            )
     live_finger_midpoint = get_gripper_finger_midpoint()
     desired_planar_center = (
         np.asarray(physical_alignment_center[:2], dtype=float)
@@ -1642,14 +1683,14 @@ def execute_pick_place(object_name, target_name):
             abs(first_containment["axial_error_m"])
             <= first_containment["axial_limit_m"]
             and first_containment["approach_inside"]
-            and planar_correction_norm <= 0.03
+            and planar_correction_norm <= LARGE_CAN_POST_CLOSE_MAX_CORRECTION
             and retry_clearance >= retry_clearance_minimum
         )
         containment_retry = {
             "attempted": retry_eligible,
             "planar_correction_m": planar_correction.tolist(),
             "planar_correction_norm_m": planar_correction_norm,
-            "maximum_correction_m": 0.03,
+            "maximum_correction_m": LARGE_CAN_POST_CLOSE_MAX_CORRECTION,
             "clearance_before_retry_m": retry_clearance,
             "minimum_clearance_m": retry_clearance_minimum,
             "first_containment": first_containment,
@@ -1779,7 +1820,7 @@ def execute_pick_place(object_name, target_name):
     if use_simulated_attachment and contact_confirmed:
         attach_simulated_object(target_prim, object_prim_path)
         grasp_strategy += "+contact_confirmed_fixed_joint"
-        print("🧲 夹爪闭合并通过几何校验后建立 PhysX FixedJoint")
+        print("🧲 已建立 Isaac 仿真固定连接")
     elif use_simulated_attachment:
         use_simulated_attachment = False
         print("⚠️ 未检测到夹持阻力，禁止仿真随动附着")
@@ -2277,9 +2318,8 @@ def execute_pick_place(object_name, target_name):
         "gripper_grasp_position": grasp_position.tolist(),
         "place_position": goal_position.tolist(),
         "task_duration_sec": round(time.perf_counter() - task_started, 3),
+        "perception_source": perception_source,
     }
-    if graspnet_inference_error is not None:
-        result["graspnet_inference_error"] = graspnet_inference_error
     return result
 
 

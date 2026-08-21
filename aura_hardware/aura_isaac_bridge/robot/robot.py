@@ -131,10 +131,23 @@ def _load_aura_runtime_config() -> None:
         "AURA_LARGE_CAN_CLOSED_JAW_CLEARANCE_LIFT": (
             "large_can_closed_jaw_clearance_lift_m", 0.0
         ),
+        "AURA_LARGE_CAN_POST_CLOSE_MAX_CORRECTION": (
+            "large_can_post_close_max_correction_m", 0.04
+        ),
+        "AURA_GRASPNET_REQUIRED": ("graspnet_required", True),
     }
     for env_name, (key, default) in config_env.items():
         if env_name not in os.environ and key in robot:
             set_value(env_name, robot.get(key, default))
+    # These switches change the physical meaning of a grasp.  A VS Code
+    # hot-reload reuses the Isaac process environment, so an old value from a
+    # previous runtime must not silently override the current Aura config.
+    for env_name, key in (
+        ("AURA_ALLOW_OVERSIZED_CAN_GRASP", "allow_oversized_can_grasp"),
+        ("AURA_LARGE_CAN_USE_SIMULATED_ATTACHMENT", "large_can_use_simulated_attachment"),
+    ):
+        if key in robot:
+            set_value(env_name, robot[key])
     set_value("AURA_BANANA_USE_SIMULATED_ATTACHMENT", str(bool(robot.get("banana_use_simulated_attachment", True))).lower())
     set_value("AURA_USE_GRASPNET", str(bool(robot.get("use_graspnet", True))).lower())
     set_value("AURA_USE_GRASPNET_ORIENTATION", str(bool(robot.get("use_graspnet_orientation", False))).lower())

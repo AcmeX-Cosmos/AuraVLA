@@ -36,7 +36,13 @@ Isaac execution: enabled
 Isaac camera: /tmp/aura-vla-camera
 ```
 
-## 3. 快捷指令
+## 3.1 GraspNet 运行要求
+
+AuraVLA 当前强制使用 GraspNet 生成抓取点。GraspNet baseline、Python 依赖和
+`checkpoint-rs.tar` 必须存在于配置的模型目录中；模型不可用时任务会安全终止，
+不会回退到场景几何抓取。
+
+## 4. 快捷指令
 
 在 NVIDIA Agent 的 `you>` 提示符输入：
 
@@ -50,7 +56,7 @@ Isaac camera: /tmp/aura-vla-camera
 | `6` | `/camera`，刷新并检查 Isaac 相机帧 |
 | `7` | 现在画面中有什么物体 |
 
-## 4. Agent 命令
+## 5. Agent 命令
 
 ```text
 /isaac       恢复当前 Isaac Sim VS Code Edition 运行时
@@ -63,7 +69,7 @@ Isaac camera: /tmp/aura-vla-camera
 /quit        退出 NVIDIA Agent
 ```
 
-## 5. 状态检查
+## 6. 状态检查
 
 检查 Task Bridge：
 
@@ -85,7 +91,17 @@ ls -lh /tmp/aura-vla-camera/
 
 目录应持续更新 RGB、深度和元数据文件。
 
-## 6. 常见问题
+## 7. 常见问题
+
+### GraspNet 不可用
+
+检查模型目录和 checkpoint 配置，然后重新加载 Isaac 运行时：
+
+```bash
+./aura_scripts/start_isaac_robot.sh
+```
+
+任务响应会返回 `GRASPNET_UNAVAILABLE`，在模型恢复前不会执行抓取。
 
 ### Isaac executor 不可用
 

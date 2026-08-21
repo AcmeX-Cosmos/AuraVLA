@@ -71,16 +71,20 @@ robot:
   max_grasp_approach_tilt_deg: 15.0
   target_grasp_approach_tilt_deg: 10.0
   banana_use_simulated_attachment: true
+  # GraspNet is mandatory for all grasp actions. There is no scene-geometry
+  # fallback when the model or its checkpoint is unavailable.
+  graspnet_required: true
   use_graspnet: true
   use_graspnet_orientation: true
   # Isaac-only demonstration mode for the 102 mm MasterChef can. The
   # calibrated physical gripper opening is about 80 mm, so keep this false
   # for hardware-valid experiments.
-  allow_oversized_can_grasp: true
-  large_can_use_simulated_attachment: true
-  # Compensates the measured DACH jaw-tip drop between open approach and
-  # contact closure. Keep this Isaac-only alongside oversized-can mode.
+  allow_oversized_can_grasp: false
+  large_can_use_simulated_attachment: false
+  # Only used when an Isaac oversized-can experiment is explicitly enabled.
+  # It is inactive in the default physical-grasp configuration above.
   large_can_closed_jaw_clearance_lift_m: 0.012
+  large_can_post_close_max_correction_m: 0.04
   gripper_close_frames: 120
   gripper_max_effort_n: 16.0
   gripper_stiffness: 500.0

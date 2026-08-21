@@ -54,7 +54,13 @@ CAMERA_PRIM_PATH = os.environ.get("AURA_CAMERA_PRIM_PATH", "/World/DACH_TRON2A/h
 CAMERA_RESOLUTION = (640, 360)
 CAMERA_PREVIEW_RESOLUTION = (640, 360)
 SHOW_GRASP_DEBUG = False
-USE_GRASPNET = os.environ.get("AURA_USE_GRASPNET", "true").strip().lower() in ("true", "1", "yes", "on")
+GRASPNET_REQUIRED = os.environ.get(
+    "AURA_GRASPNET_REQUIRED", "true"
+).strip().lower() in {"true", "1", "yes", "on"}
+USE_GRASPNET = GRASPNET_REQUIRED or (
+    os.environ.get("AURA_USE_GRASPNET", "true").strip().lower()
+    in ("true", "1", "yes", "on")
+)
 USE_GRASPNET_ORIENTATION = os.environ.get("AURA_USE_GRASPNET_ORIENTATION", "false").strip().lower() in {"1", "true", "yes", "on"}
 DACH_SCENE_ROOT_PATH = "/World/DACH_TRON2A"
 DACH_ARTICULATION_ROOT_PATH = "/World/DACH_TRON2A/root_joint"
@@ -134,6 +140,14 @@ LARGE_CAN_CLOSED_JAW_CLEARANCE_LIFT = max(
     ),
     0.0,
 )
+LARGE_CAN_POST_CLOSE_MAX_CORRECTION = max(
+    float(
+        os.environ.get(
+            "AURA_LARGE_CAN_POST_CLOSE_MAX_CORRECTION", "0.04"
+        )
+    ),
+    0.0,
+)
 GRASP_REFINEMENT_STEPS = max(int(os.environ.get("AURA_GRASP_REFINEMENT_STEPS", "0")), 0)
 BANANA_GRIPPER_CLOSE_POSITION = float(os.environ.get("AURA_BANANA_GRIPPER_CLOSE_POSITION", "0.0"))
 BANANA_PLANAR_REFINEMENT_STEPS = max(int(os.environ.get("AURA_BANANA_PLANAR_REFINEMENT_STEPS", "2")), 0)
@@ -195,7 +209,6 @@ GRIPPER_CONTACT_SETTLE_FRAMES = max(int(os.environ.get("AURA_GRIPPER_CONTACT_SET
 GRIPPER_PRELOAD_CONFIRM_FRAMES = max(
     int(os.environ.get("AURA_GRIPPER_PRELOAD_CONFIRM_FRAMES", "3")), 1
 )
-
 # ── 物理 / 摩擦 ──────────────────────────────────────────────────
 BANANA_STATIC_FRICTION = float(os.environ.get("AURA_BANANA_STATIC_FRICTION", "1.2"))
 BANANA_DYNAMIC_FRICTION = float(os.environ.get("AURA_BANANA_DYNAMIC_FRICTION", "1.0"))
