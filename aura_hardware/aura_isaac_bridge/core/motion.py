@@ -54,25 +54,6 @@ def quat_normalize(quat):
     return quat / norm
 
 
-def rotate_quat_about_world_z(quat, angle_rad):
-    """Rotate a scalar-first quaternion around world Z."""
-    w, x, y, z = quat_normalize(quat)
-    half_angle = 0.5 * float(angle_rad)
-    cosine = math.cos(half_angle)
-    sine = math.sin(half_angle)
-    return quat_normalize(
-        np.array(
-            [
-                cosine * w - sine * z,
-                cosine * x - sine * y,
-                cosine * y + sine * x,
-                cosine * z + sine * w,
-            ],
-            dtype=float,
-        )
-    )
-
-
 def _max_path_orientation_error(joint_targets, desired_orientation):
     """Return the largest TCP orientation deviation along a joint path."""
     if desired_orientation is None or not joint_targets:
@@ -965,68 +946,11 @@ def plan_collision_free_keyposes(keyposes, orientation=None):
                             f"🧭 sparse keypose {keypose_index}: "
                             "使用精确 IK 终点的关节空间 RRT 路径"
                         )
-        if segment is None and current_orientation is not None:
-            # A fixed wrist yaw can make an otherwise reachable overhead
-            # target fail IK. Rotate only around world Z at payload-safe
-            # height; this preserves a top-down approach axis and every
-            # candidate still requires a collision-aware RRT path.
-            yaw_offsets_deg = [
-                value
-                for magnitude in range(15, 91, 15)
-                for value in (magnitude, -magnitude)
-            ]
-            for yaw_offset_deg in yaw_offsets_deg:
-                candidate_orientation = rotate_quat_about_world_z(
-                    current_orientation,
-                    math.radians(yaw_offset_deg),
-                )
-                candidate_segment = state.controller.plan_collision_free_pose_path(
-                    keypose,
-                    target_orientation=candidate_orientation,
-                    start_joint_positions=start_joints,
-                )
-                candidate_strategy = "task_space_rrt"
-                if candidate_segment is None:
-                    candidate_endpoint = state.controller.plan_pose_waypoints(
-                        [keypose],
-                        target_orientation=candidate_orientation,
-                        warm_start=start_joints,
-                        allow_orientation_fallback=False,
-                    )
-                    if candidate_endpoint:
-                        candidate_segment = (
-                            state.controller.plan_collision_free_cspace_path(
-                                candidate_endpoint[-1],
-                                start_joint_positions=start_joints,
-                            )
-                        )
-                        candidate_strategy = "cspace_rrt"
-                if candidate_segment is None:
-                    continue
-                path_tilt_error = _max_path_approach_axis_error(
-                    candidate_segment,
-                    current_orientation,
-                )
-                if path_tilt_error > math.radians(20.0):
-                    continue
-                segment = candidate_segment
-                current_orientation = candidate_orientation
-                diagnostic["yaw_offset_deg"] = yaw_offset_deg
-                diagnostic["yaw_strategy"] = candidate_strategy
-                diagnostic["yaw_path_tilt_error_deg"] = math.degrees(
-                    path_tilt_error
-                )
-                print(
-                    f"🧭 sparse keypose {keypose_index}: "
-                    f"采用碰撞感知的世界 Z 轴转向 "
-                    f"{yaw_offset_deg:+d}°"
-                )
-                break
         if segment is None:
             diagnostic["success"] = False
             print(
                 f"⚠️ sparse keypose {keypose_index}/{len(sparse_keyposes)} "
-                "RRT 规划失败；未执行非碰撞感知回退"
+                "固定末端姿态 RRT 规划失败；拒绝改变抓取姿态"
             )
             return None
         diagnostic["success"] = True
@@ -1090,6 +1014,7 @@ def move_ee_smooth(
     max_joint_step_rad=None,
     minimum_frames=None,
     cartesian_waypoint_limit=None,
+    cartesian_path_samples=None,
 ):
     actual_start = get_rmp_ee_position()
     end_position = np.asarray(end_position, dtype=float)
@@ -1098,7 +1023,13 @@ def move_ee_smooth(
         if cartesian_waypoint_limit is None
         else max(int(cartesian_waypoint_limit), 1)
     )
-    waypoint_count = min(max(int(segments), 1), waypoint_limit)
+    if cartesian_path_samples is None:
+        waypoint_count = min(max(int(segments), 1), waypoint_limit)
+    else:
+        # Keep the semantic route sparse while sampling the straight segment
+        # densely enough that joint interpolation cannot sweep the TCP
+        # sideways around a held object.
+        waypoint_count = max(int(cartesian_path_samples), 1)
     waypoints = [
         actual_start + (index / waypoint_count) * (end_position - actual_start)
         for index in range(1, waypoint_count + 1)

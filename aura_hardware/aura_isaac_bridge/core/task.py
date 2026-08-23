@@ -203,6 +203,9 @@ def get_top_down_grasp_orientation(object_name, target_prim, tilt_override=None)
         object_short_axis = get_mesh_horizontal_min_width_axis(
             get_current_stage(), target_prim.prim_path
         )
+        # Both signs describe the same physical jaw line; choose the sign
+        # matching the reachable DACH wrist branch.
+        object_short_axis = -object_short_axis
         object_long_axis = np.array(
             [-object_short_axis[1], object_short_axis[0]], dtype=float
         )
@@ -298,6 +301,7 @@ def adjust_object_grasp_position(
         object_short_axis = get_mesh_horizontal_min_width_axis(
             get_current_stage(), object_prim_path
         )
+        object_short_axis = -object_short_axis
         object_long_axis = np.array(
             [-object_short_axis[1], object_short_axis[0]], dtype=float
         )
@@ -607,6 +611,7 @@ def execute_pick_place(object_name, target_name):
         object_short_axis = get_mesh_horizontal_min_width_axis(
             get_current_stage(), object_prim_path
         )
+        object_short_axis = -object_short_axis
     else:
         _, object_short_axis = get_mesh_horizontal_principal_axes(
             get_current_stage(), object_prim_path
@@ -1060,7 +1065,7 @@ def execute_pick_place(object_name, target_name):
     # default here can overwrite an adaptive banana tilt candidate.
     grasp_orientation = hover_reference_orientation
     desired_closing_axis = (
-        get_mesh_horizontal_min_width_axis(get_current_stage(), object_prim_path)
+        -get_mesh_horizontal_min_width_axis(get_current_stage(), object_prim_path)
         if canonical_object_name in {"master_chef_can", "tomato_soup_can"}
         else get_mesh_horizontal_principal_axes(
             get_current_stage(), object_prim_path
@@ -1139,21 +1144,23 @@ def execute_pick_place(object_name, target_name):
             f"alignment={physical_alignment:.3f}"
         )
     else:
-        # The selected banana pose already passed strict IK for both hover and
-        # grasp.  A fixed-TCP yaw correction here used to jump wrist branches
-        # and create the visible twist.  Fail cleanly if execution did not
-        # realize the prevalidated pose instead of introducing a new pose.
-        orientation_result = {
-            "success": False,
-            "orientation_constrained": True,
-            "planner": "strict_prevalidated_hover",
-            "distance_m": 0.0,
-            "finger_clearance_m": float(get_gripper_table_clearance()),
-            "downward_tilt_deg": float(np.degrees(current_hover_tilt)),
-            "closing_alignment": physical_alignment,
-            "orientation_refined": False,
-            "hold_orientation": None,
-        }
+        # PhysX can settle a reachable banana pose a few degrees off the
+        # planned wrist branch. Re-align at the high hover pose before the
+        # descent; the same live-axis threshold remains mandatory.
+        orientation_result = move_ee_collision_aware_approach(
+            "banana_hover_orientation_refine",
+            get_rmp_ee_position(),
+            tolerance=0.02,
+            orientation=hover_reference_orientation,
+            gripper_positions=gripper_open_target,
+            desired_closing_axis=desired_closing_axis,
+            minimum_closing_alignment=alignment_threshold,
+            maximum_approach_tilt_rad=np.radians(60.0),
+        )
+        print(
+            "🧭 香蕉悬停姿态闭环重对齐: "
+            f"success={orientation_result['success']}"
+        )
     # Validate the pose actually reached by PhysX, not the stale alignment
     # measured before the hover-orientation trajectory ran.
     physical_alignment = float(
@@ -1832,6 +1839,7 @@ def execute_pick_place(object_name, target_name):
         max_joint_step_rad=GRASP_LIFT_MAX_JOINT_STEP,
         minimum_frames=GRASP_LIFT_MIN_FRAMES,
         cartesian_waypoint_limit=1,
+        cartesian_path_samples=20,
     )
     lifted_object_position, _, _ = get_sim_pose(target_prim)
     lifted_gripper_position = get_rmp_ee_position().copy()
