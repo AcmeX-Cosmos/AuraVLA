@@ -1850,9 +1850,18 @@ def reset_robot_after_task():
 
     try:
         ensure_robot_control_ready()
-        state.dach_arm.gripper.set_joint_positions(state.GRIPPER_OPEN_POSITIONS)
+        open_result = open_gripper_slowly(
+            get_rmp_ee_position(),
+            frames=18,
+            target_open=state.GRIPPER_OPEN_POSITIONS,
+        )
+        if not open_result["converged"]:
+            cleanup_errors.append(
+                "gripper: failed to converge to open target, "
+                f"error={open_result['error_m']:.4f} m"
+            )
         state.dach_left.gripper.set_joint_positions(state.GRIPPER_OPEN_POSITIONS)
-        step_app(3)
+        step_app(5)
         basket_retreat_ok = True
         if (
             state.planning_basket_obstacle is not None

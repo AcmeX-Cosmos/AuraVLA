@@ -44,6 +44,7 @@ from aura_isaac_bridge.core.state import (
     GRASP_LIFT_MAX_JOINT_STEP, GRASP_LIFT_MIN_FRAMES,
     CARTESIAN_WAYPOINT_SPACING, CARRY_APEX_CLEARANCE,
     TRANSPORT_LIFT_HEIGHT, CARRY_CARTESIAN_WAYPOINT_SPACING,
+    CARRY_MAX_JOINT_STEP, CARRY_MIN_FRAMES,
     SHOW_GRASP_DEBUG, USE_GRASPNET, USE_GRASPNET_ORIENTATION,
     GRASP_POSITION_OFFSET, GRASP_INSERT_DEPTH,
     MIN_GRIPPER_TABLE_CLEARANCE, TABLE_CLEARANCE_ABORT_MARGIN,
@@ -60,6 +61,7 @@ from aura_isaac_bridge.core.perception import (
     get_current_bbox_center,
     get_mesh_center,
     get_mesh_extent_along_axis,
+    get_mesh_horizontal_min_width_axis,
     get_current_mesh_horizontal_cross_section_center,
     get_mesh_horizontal_principal_axes,
     show_red_grasp_point,
@@ -197,6 +199,13 @@ def get_top_down_grasp_orientation(object_name, target_prim, tilt_override=None)
         get_current_stage(),
         target_prim.prim_path,
     )
+    if canonical_name in {"master_chef_can", "tomato_soup_can"}:
+        object_short_axis = get_mesh_horizontal_min_width_axis(
+            get_current_stage(), target_prim.prim_path
+        )
+        object_long_axis = np.array(
+            [-object_short_axis[1], object_short_axis[0]], dtype=float
+        )
     inward_axis = None
     if DACH_BASE_XY is not None:
         object_position, _ = target_prim.get_world_pose()
@@ -235,8 +244,8 @@ def get_top_down_grasp_orientation(object_name, target_prim, tilt_override=None)
         dtype=float,
     )
     print(
-        f"🧭 {canonical_name} 网格 PCA: long={object_long_axis}, "
-        f"short={object_short_axis}; 夹爪沿短轴闭合, "
+        f"🧭 {canonical_name} 抓取轴: long={object_long_axis}, "
+        f"short={object_short_axis}; 夹爪沿最窄方向闭合, "
         f"inward_tilt_axis={tilt_axis}"
     )
     closing_axis -= np.dot(closing_axis, approach_axis) * approach_axis
@@ -285,6 +294,13 @@ def adjust_object_grasp_position(
         get_current_stage(),
         object_prim_path,
     )
+    if canonical_name in {"master_chef_can", "tomato_soup_can"}:
+        object_short_axis = get_mesh_horizontal_min_width_axis(
+            get_current_stage(), object_prim_path
+        )
+        object_long_axis = np.array(
+            [-object_short_axis[1], object_short_axis[0]], dtype=float
+        )
     mesh_center = get_mesh_center(get_current_stage(), object_prim_path)
     long_axis_offset = float(
         np.dot(source_xy - mesh_center[:2], object_long_axis)
@@ -565,18 +581,36 @@ def execute_pick_place(object_name, target_name):
     else:
         print("⚠️ 左右臂快速连续 IK 均未找到解；继续交给 Lula RRT 做最终可达性判断")
         _activate_arm(reachability.get("preferred_arm", DACH_ARM_SIDE))
-    state.dach_arm.gripper.set_joint_positions(gripper_open_target)
-    step_app(10)
     ensure_pickable_object(get_current_stage(), object_prim_path)
-    state.dach_arm.gripper.set_joint_positions(gripper_open_target)
-    step_app(10)
+    # A position command is not an instantaneous jaw reset.  The previous
+    # 20-frame wait could leave the finite-effort gripper nearly closed, so
+    # the live aperture check rejected the next object before motion started.
+    open_result = open_gripper_slowly(
+        get_rmp_ee_position(),
+        frames=18,
+        target_open=gripper_open_target,
+    )
+    if not open_result["converged"]:
+        return {
+            "success": False,
+            "message": "gripper did not reach the open target before task precheck",
+            "object_name": str(object_name),
+            "target_name": str(target_name),
+            "gripper_feedback": open_result["feedback"].tolist(),
+            "gripper_target": open_result["target"].tolist(),
+            "gripper_open_error_m": open_result["error_m"],
+        }
 
     # Reject geometrically impossible grasps while the arm is still at its
     # safe starting pose. The later live-axis check remains the final guard.
-    _, object_short_axis = get_mesh_horizontal_principal_axes(
-        get_current_stage(),
-        object_prim_path,
-    )
+    if canonical_object_name in {"master_chef_can", "tomato_soup_can"}:
+        object_short_axis = get_mesh_horizontal_min_width_axis(
+            get_current_stage(), object_prim_path
+        )
+    else:
+        _, object_short_axis = get_mesh_horizontal_principal_axes(
+            get_current_stage(), object_prim_path
+        )
     minimum_closing_axis = np.array(
         [object_short_axis[0], object_short_axis[1], 0.0],
         dtype=float,
@@ -1025,10 +1059,13 @@ def execute_pick_place(object_name, target_name):
     # Keep the exact pose selected by strict IK. Rebuilding the configured
     # default here can overwrite an adaptive banana tilt candidate.
     grasp_orientation = hover_reference_orientation
-    desired_closing_axis = get_mesh_horizontal_principal_axes(
-        get_current_stage(),
-        object_prim_path,
-    )[1]
+    desired_closing_axis = (
+        get_mesh_horizontal_min_width_axis(get_current_stage(), object_prim_path)
+        if canonical_object_name in {"master_chef_can", "tomato_soup_can"}
+        else get_mesh_horizontal_principal_axes(
+            get_current_stage(), object_prim_path
+        )[1]
+    )
     alignment_threshold = (
         BANANA_MIN_SHORT_AXIS_ALIGNMENT
         if canonical_object_name == "banana"
@@ -1288,7 +1325,7 @@ def execute_pick_place(object_name, target_name):
             f"pregrasp_planar_align_{refinement + 1}",
             get_rmp_ee_position(),
             corrected_hover_tcp,
-            segments=2,
+            segments=1,
             tolerance=0.008,
             orientation=grasp_motion_orientation,
             gripper_positions=gripper_open_target,
@@ -1443,7 +1480,7 @@ def execute_pick_place(object_name, target_name):
             f"grasp_refine_{refinement + 1}",
             get_rmp_ee_position(),
             grasp_position,
-            segments=3,
+            segments=1,
             max_steps_per_segment=40,
             tolerance=0.008,
             orientation=grasp_motion_orientation,
@@ -1501,7 +1538,7 @@ def execute_pick_place(object_name, target_name):
                 "low_grasp_planar_align",
                 get_rmp_ee_position(),
                 corrected_grasp_tcp,
-                segments=2,
+                segments=1,
                 tolerance=0.008,
                 orientation=grasp_motion_orientation,
                 gripper_positions=gripper_open_target,
@@ -1549,7 +1586,7 @@ def execute_pick_place(object_name, target_name):
                 "banana_final_vertical_insertion",
                 get_rmp_ee_position(),
                 insertion_target,
-                segments=2,
+                segments=1,
                 max_steps_per_segment=50,
                 tolerance=0.006,
                 orientation=grasp_motion_orientation,
@@ -1616,10 +1653,55 @@ def execute_pick_place(object_name, target_name):
         state.dach_arm.gripper.set_joint_positions(gripper_open_target)
         step_app()
     preclose_table_clearance = float(get_gripper_table_clearance())
-    if canonical_object_name == "banana":
-        preclose_target_clearance = (
-            get_gripper_table_contact_safe_clearance() + 0.002
+    safe_preclose_clearance = get_gripper_table_contact_safe_clearance()
+    preclose_target_clearance = (
+        safe_preclose_clearance + 0.002
+        if canonical_object_name == "banana"
+        else safe_preclose_clearance + 0.0005
+    )
+    if (
+        canonical_object_name != "banana"
+        and preclose_table_clearance < safe_preclose_clearance
+    ):
+        clearance_correction = (
+            preclose_target_clearance - preclose_table_clearance
         )
+        corrected_preclose_position = get_rmp_ee_position().copy()
+        corrected_preclose_position[2] += clearance_correction
+        print(
+            "🛡️ 闭爪前桌面净空校正: "
+            f"observed={preclose_table_clearance:.4f} m, "
+            f"target={preclose_target_clearance:.4f} m, "
+            f"raise={clearance_correction:.4f} m"
+        )
+        correction_reached = move_ee_smooth(
+            "preclose_vertical_clearance_correction",
+            get_rmp_ee_position(),
+            corrected_preclose_position,
+            segments=1,
+            max_steps_per_segment=40,
+            tolerance=0.004,
+            orientation=grasp_motion_orientation,
+            gripper_positions=gripper_open_target,
+            monitor_table_clearance=True,
+            max_joint_step_rad=GRASP_APPROACH_MAX_JOINT_STEP,
+            minimum_frames=GRASP_APPROACH_MIN_FRAMES,
+        )
+        grasp_position = get_rmp_ee_position().copy()
+        preclose_table_clearance = float(get_gripper_table_clearance())
+        if (
+            not correction_reached
+            or preclose_table_clearance
+            < safe_preclose_clearance
+        ):
+            move_robot_home(frames=90)
+            return {
+                "success": False,
+                "message": "failed to establish safe table clearance before closing",
+                "gripper_table_clearance_m": preclose_table_clearance,
+                "target_clearance_m": preclose_target_clearance,
+            }
+    if canonical_object_name == "banana":
         if preclose_table_clearance > preclose_target_clearance + 0.006:
             move_robot_home(frames=90)
             return {
@@ -1730,10 +1812,9 @@ def execute_pick_place(object_name, target_name):
         hold_ee_target(grasp_position, grasp_motion_orientation)
         step_app()
 
-    # Build the lift from the settled live TCP, not the pre-contact target.
-    # Twenty fixed-orientation Cartesian points constrain the TCP to one
-    # vertical line; sparse joint interpolation can otherwise bow sideways
-    # close to the table even when its endpoints share the same XY.
+    # Build one vertical lift waypoint from the settled live TCP, not the
+    # pre-contact target. Keep the lift as a single waypoint so the arm does
+    # not introduce an intermediate horizontal bend near the tabletop.
     lift_start_position = get_rmp_ee_position().copy()
     lift_position = lift_start_position + np.array(
         [0.0, 0.0, TRANSPORT_LIFT_HEIGHT],
@@ -1743,14 +1824,14 @@ def execute_pick_place(object_name, target_name):
         "lift",
         lift_start_position,
         lift_position,
-        segments=GRASP_LIFT_MIN_FRAMES,
+        segments=1,
         max_steps_per_segment=50,
         tolerance=0.065,
         orientation=transport_orientation,
         gripper_positions=gripper_close_target,
         max_joint_step_rad=GRASP_LIFT_MAX_JOINT_STEP,
         minimum_frames=GRASP_LIFT_MIN_FRAMES,
-        cartesian_waypoint_limit=GRASP_LIFT_MIN_FRAMES,
+        cartesian_waypoint_limit=1,
     )
     lifted_object_position, _, _ = get_sim_pose(target_prim)
     lifted_gripper_position = get_rmp_ee_position().copy()
@@ -1860,6 +1941,7 @@ def execute_pick_place(object_name, target_name):
     carry_transport_orientation = transport_orientation
     carry_path_strategy = "rrt_keypose"
     carry_planning_attempts = []
+    carry_payload_containment = None
     # Every transport candidate is validated against the live table and
     # basket obstacles before execution. Cartesian IK alone proves only
     # reachability and must not be used as a collision-planning substitute.
@@ -1922,26 +2004,75 @@ def execute_pick_place(object_name, target_name):
             "carry_clearance_route",
             carry_joint_targets,
             gripper_positions=gripper_close_target,
+            max_joint_step_rad=CARRY_MAX_JOINT_STEP,
+            minimum_frames=CARRY_MIN_FRAMES,
         )
         carry_terminal_position = np.asarray(carry_points[-1], dtype=float)
         carry_error = float(
             np.linalg.norm(get_rmp_ee_position() - carry_terminal_position)
         )
         carry_ok = carry_error <= 0.08
+        if carry_ok:
+            carry_payload_containment = get_object_gripper_containment(
+                object_prim_path,
+                target_prim=target_prim,
+            )
+            carry_feedback = np.asarray(
+                state.dach_arm.gripper.get_joint_positions(),
+                dtype=float,
+            )
+            carry_residuals = np.maximum(
+                carry_feedback - gripper_close_target,
+                0.0,
+            )
+            carry_efforts = get_gripper_joint_efforts()
+            effort_feedback_available = bool(np.all(np.isfinite(carry_efforts)))
+            carry_contact_confirmed = bool(
+                np.all(carry_efforts >= GRIPPER_CONTACT_FORCE_THRESHOLD)
+                if effort_feedback_available
+                else np.all(
+                    carry_residuals >= GRIPPER_CONTACT_PRELOAD_RESIDUAL
+                )
+            )
+            carry_geometry_retained = bool(
+                abs(carry_payload_containment["axial_error_m"])
+                <= carry_payload_containment["axial_limit_m"]
+                and carry_payload_containment["radial_error_m"]
+                <= carry_payload_containment["radial_limit_m"]
+            )
+            carry_payload_containment.update(
+                {
+                    "retained": bool(
+                        carry_geometry_retained and carry_contact_confirmed
+                    ),
+                    "geometry_retained": carry_geometry_retained,
+                    "contact_confirmed": carry_contact_confirmed,
+                    "gripper_feedback": carry_feedback.tolist(),
+                    "gripper_target": gripper_close_target.tolist(),
+                    "gripper_residuals_m": carry_residuals.tolist(),
+                    "gripper_efforts_n": carry_efforts.tolist(),
+                }
+            )
+            carry_ok = bool(carry_payload_containment["retained"])
+            if not carry_ok:
+                print(
+                    "🛑 持物运输后负载已脱离夹指："
+                    f"{carry_payload_containment}"
+                )
     if not carry_ok:
         abort_position = get_rmp_ee_position()
         returned_to_source = move_ee_smooth(
             "carry_abort_vertical_return",
             abort_position,
             lift_start_position,
-            segments=GRASP_LIFT_MIN_FRAMES,
+            segments=1,
             tolerance=0.05,
             orientation=transport_orientation,
             gripper_positions=gripper_close_target,
             monitor_table_clearance=True,
             max_joint_step_rad=GRASP_LIFT_MAX_JOINT_STEP,
             minimum_frames=GRASP_LIFT_MIN_FRAMES,
-            cartesian_waypoint_limit=GRASP_LIFT_MIN_FRAMES,
+            cartesian_waypoint_limit=1,
         )
         if returned_to_source:
             open_gripper_slowly(
@@ -1957,7 +2088,7 @@ def execute_pick_place(object_name, target_name):
                 "carry_abort_retreat",
                 lift_start_position,
                 abort_retreat_position,
-                segments=3,
+                segments=1,
                 tolerance=0.05,
                 orientation=transport_orientation,
                 gripper_positions=gripper_open_target,
@@ -1971,6 +2102,7 @@ def execute_pick_place(object_name, target_name):
             "returned_to_source_before_release": returned_to_source,
             "payload_safe_tcp_z_m": payload_safe_tcp_z,
             "carry_planning_attempts": carry_planning_attempts,
+            "carry_payload_containment": carry_payload_containment,
         }
     placing_in_basket = canonical_target_name == "basket"
     if placing_in_basket and not set_planning_basket_obstacle_enabled(False):
@@ -1985,7 +2117,7 @@ def execute_pick_place(object_name, target_name):
             "basket_vertical_corridor_entry",
             get_rmp_ee_position(),
             place_hover_position,
-            segments=10,
+            segments=1,
             max_steps_per_segment=45,
             tolerance=0.025,
             orientation=transport_orientation,
@@ -1993,7 +2125,7 @@ def execute_pick_place(object_name, target_name):
             monitor_table_clearance=True,
             max_joint_step_rad=0.016,
             minimum_frames=30,
-            cartesian_waypoint_limit=10,
+            cartesian_waypoint_limit=1,
         )
         if not corridor_entry_ok:
             set_planning_basket_obstacle_enabled(True)
@@ -2023,7 +2155,7 @@ def execute_pick_place(object_name, target_name):
         "lower",
         place_hover_position,
         place_gripper_position,
-        segments=3,
+        segments=1,
         max_steps_per_segment=45,
         tolerance=0.07,
         orientation=transport_orientation,
@@ -2040,7 +2172,7 @@ def execute_pick_place(object_name, target_name):
             "lower_position_first_fallback",
             get_rmp_ee_position(),
             place_gripper_position,
-            segments=4,
+            segments=1,
             max_steps_per_segment=55,
             tolerance=0.07,
             orientation=transport_orientation,
@@ -2077,7 +2209,7 @@ def execute_pick_place(object_name, target_name):
         "release_vertical_clear",
         place_gripper_position,
         release_clear_position,
-        segments=3,
+        segments=1,
         max_steps_per_segment=35,
         tolerance=0.04,
         orientation=transport_orientation,
@@ -2174,7 +2306,7 @@ def execute_pick_place(object_name, target_name):
         "retreat_after_place",
         get_rmp_ee_position(),
         retreat_position,
-        segments=3,
+        segments=1,
         max_steps_per_segment=50,
         tolerance=0.02,
         orientation=transport_orientation,
@@ -2246,6 +2378,8 @@ def execute_pick_place(object_name, target_name):
         "path_strategy": carry_path_strategy,
         "cartesian_waypoint_spacing_m": CARTESIAN_WAYPOINT_SPACING,
         "carry_cartesian_waypoint_spacing_m": CARRY_CARTESIAN_WAYPOINT_SPACING,
+        "carry_max_joint_step_rad": CARRY_MAX_JOINT_STEP,
+        "carry_min_frames": CARRY_MIN_FRAMES,
         "transport_lift_height_m": TRANSPORT_LIFT_HEIGHT,
         "carry_extra_clearance_m": carry_clearance_used,
         "phases": {

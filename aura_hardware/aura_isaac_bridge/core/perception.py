@@ -93,6 +93,44 @@ def get_mesh_horizontal_principal_axes(stage, prim_path):
     return long_axis, short_axis
 
 
+def get_mesh_horizontal_min_width_axis(stage, prim_path, samples=720):
+    """Return the horizontal axis with the smallest mesh projection."""
+    root = stage.GetPrimAtPath(prim_path)
+    if not root.IsValid():
+        raise RuntimeError(f"无法计算物体最窄方向，Prim 不存在: {prim_path}")
+    xform_cache = UsdGeom.XformCache(Usd.TimeCode.Default())
+    world_point_clouds = []
+    for prim in Usd.PrimRange(root):
+        if not prim.IsA(UsdGeom.Mesh):
+            continue
+        local_points = UsdGeom.Mesh(prim).GetPointsAttr().Get() or []
+        if not local_points:
+            continue
+        local_to_world = xform_cache.GetLocalToWorldTransform(prim)
+        world_point_clouds.append(
+            np.asarray(
+                [
+                    local_to_world.Transform(
+                        Gf.Vec3d(float(point[0]), float(point[1]), float(point[2]))
+                    )
+                    for point in local_points
+                ],
+                dtype=float,
+            )[:, :2]
+        )
+    if not world_point_clouds:
+        raise RuntimeError(f"无法计算物体最窄方向，Prim 下没有 Mesh: {prim_path}")
+    points = np.concatenate(world_point_clouds, axis=0)
+    sample_count = max(int(samples), 36)
+    angles = np.arange(sample_count, dtype=float) * (np.pi / sample_count)
+    axes = np.column_stack((np.cos(angles), np.sin(angles)))
+    widths = np.ptp(points @ axes.T, axis=0)
+    axis = np.asarray(axes[int(np.argmin(widths))], dtype=float)
+    if axis[int(np.argmax(np.abs(axis)))] < 0.0:
+        axis = -axis
+    return axis
+
+
 def get_mesh_extent_along_axis(stage, prim_path, axis):
     """Return the visible mesh extent projected onto a world-space axis."""
     root = stage.GetPrimAtPath(prim_path)
