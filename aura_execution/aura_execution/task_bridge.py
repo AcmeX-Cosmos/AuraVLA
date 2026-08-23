@@ -45,9 +45,11 @@ class IsaacTaskBridge:
         execute_pick_place: Callable[[str, str], Any],
         *,
         directory: str | Path | None = None,
+        cleanup_after_task: Callable[[], Any] | None = None,
     ) -> None:
         self.paths = task_bridge_paths(directory)
         self._executor = PickPlaceExecutor(execute_pick_place)
+        self._cleanup_after_task = cleanup_after_task
         self._task: asyncio.Task[None] | None = None
         self._last_request_id: str | None = None
         self._last_heartbeat = 0.0
@@ -103,7 +105,17 @@ class IsaacTaskBridge:
         raw_plan = request.get("plan")
         if not isinstance(raw_plan, Mapping):
             raise ValueError("Task request is missing a JSON plan")
-        execution = loads_json(self._executor.execute(dumps_json(raw_plan)))
+        try:
+            execution = loads_json(self._executor.execute(dumps_json(raw_plan)))
+        finally:
+            if self._cleanup_after_task is not None:
+                try:
+                    self._cleanup_after_task()
+                except Exception as exc:
+                    print(
+                        "Task-end visualization cleanup failed: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
         return {
             "request_id": request_id,
             "success": bool(execution.get("success", False)),

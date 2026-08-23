@@ -124,6 +124,8 @@ def _load_aura_runtime_config() -> None:
         "AURA_CARTESIAN_WAYPOINT_SPACING": ("cartesian_waypoint_spacing_m", 0.04),
         "AURA_TRANSPORT_LIFT_HEIGHT": ("transport_lift_height_m", 0.16),
         "AURA_CARRY_CARTESIAN_WAYPOINT_SPACING": ("carry_cartesian_waypoint_spacing_m", 0.12),
+        "AURA_CARRY_MAX_JOINT_STEP": ("carry_max_joint_step_rad", 0.016),
+        "AURA_CARRY_MIN_FRAMES": ("carry_min_frames", 20),
         "AURA_GRASP_REFINEMENT_STEPS": ("grasp_refinement_steps", 0),
         "AURA_CARRY_APEX_CLEARANCE": ("carry_apex_clearance_m", 0.15),
         "AURA_DUAL_ARM_MIN_TCP_SEPARATION": ("dual_arm_min_tcp_separation_m", 0.18),
@@ -784,7 +786,10 @@ state.camera_bridge = start_camera_bridge(
     output_directory=os.environ.get("AURA_CAMERA_DIR", "/tmp/aura-vla-camera"),
 )
 print("✅ Camera Bridge 已启动")
-state.task_bridge = start_task_bridge(execute_pick_place_with_reset)
+state.task_bridge = start_task_bridge(
+    execute_pick_place_with_reset,
+    cleanup_after_task=lambda: cleanup_debug_markers(get_current_stage()),
+)
 print("✅ Task Bridge 已启动")
 try:
     print(

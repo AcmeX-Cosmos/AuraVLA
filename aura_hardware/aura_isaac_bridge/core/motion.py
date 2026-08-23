@@ -34,7 +34,7 @@ from aura_isaac_bridge.core.state import (
     ACTION_WAYPOINT_LIMIT, CARTESIAN_WAYPOINT_SPACING,
     DUAL_ARM_MIN_TCP_SEPARATION,
 )
-from aura_isaac_bridge.core.physics import step_app
+from aura_isaac_bridge.core.physics import step_app, cleanup_debug_markers
 from aura_isaac_bridge.robot.dach_tron2a import LEFT_ARM_HOME, RIGHT_ARM_HOME
 from aura_isaac_bridge.robot.motion_planner import minimum_jerk, SparseKeyposeDiffuser, DiffusionConfig
 from aura_isaac_bridge.core.perception import (
@@ -1877,6 +1877,14 @@ def reset_robot_after_task():
             )
     except Exception as exc:
         cleanup_errors.append(f"home: {type(exc).__name__}: {exc}")
+
+    try:
+        cleanup_debug_markers(get_current_stage())
+        print("🧹 任务结束可视化已清除")
+    except Exception as exc:
+        cleanup_errors.append(
+            f"visualization cleanup: {type(exc).__name__}: {exc}"
+        )
 
     if cleanup_errors:
         print("⚠️ 任务结束复位未完全成功: " + "; ".join(cleanup_errors))

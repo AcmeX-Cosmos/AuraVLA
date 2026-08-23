@@ -124,7 +124,17 @@ def cleanup_debug_markers(stage):
     marker_paths = []
     for prim in stage.Traverse():
         prim_path = str(prim.GetPath())
-        if prim_path == "/World/debug_grasp_point" or prim_path.startswith("/World/debug_target_"):
+        if (
+            prim_path == "/World/debug_grasp_point"
+            or prim_path.startswith("/World/debug_target_")
+            or prim_path == "/World/GraspVisualization"
+            or prim_path == "/World/AuraDebug"
+            or prim_path.startswith("/World/AuraDebug/")
+            # Remove trajectories left by the former S5 runtime in the same
+            # Isaac stage. AuraVLA does not import or execute S5 code.
+            or prim_path == "/World/S5Debug"
+            or prim_path.startswith("/World/S5Debug/")
+        ):
             marker_paths.append(prim_path)
     for prim_path in marker_paths:
         delete_prim(prim_path)
