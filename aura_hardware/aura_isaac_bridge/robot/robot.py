@@ -69,6 +69,13 @@ def _load_aura_runtime_config() -> None:
     set_value("AURA_GRASPNET_CALIBRATION_ENABLED", str(bool(calibration.get("enabled", False))).lower())
     set_value("AURA_GRASPNET_CAMERA_OFFSET_JSON", json.dumps(calibration.get("camera_offset_m", [0.0, 0.0, 0.0])))
     set_value("AURA_GRASPNET_CALIBRATION_MAX_CORRECTION_M", calibration.get("max_correction_m", 0.06))
+    fusion = perception.get("graspnet_fusion") or {}
+    set_value("AURA_GRASPNET_FUSION_FRAME_COUNT", fusion.get("frame_count", 3))
+    set_value("AURA_GRASPNET_FUSION_FRAME_INTERVAL_SEC", fusion.get("frame_interval_sec", 0.12))
+    set_value("AURA_GRASPNET_FUSION_MAX_POSITION_DISPERSION_M", fusion.get("max_position_dispersion_m", 0.025))
+    set_value("AURA_GRASPNET_FUSION_MAX_ORIENTATION_DISPERSION_DEG", fusion.get("max_orientation_dispersion_deg", 25.0))
+    set_value("AURA_GRASPNET_FUSION_POSITION_OUTLIER_FLOOR_M", fusion.get("position_outlier_floor_m", 0.012))
+    set_value("AURA_GRASPNET_FUSION_MIN_CONFIDENCE", fusion.get("min_confidence", 0.10))
     set_value("AURA_BASKET_RESET_POSITION_JSON", json.dumps(basket.get("reset_position")))
     set_value("AURA_BASKET_RESET_ORIENTATION_JSON", json.dumps(basket.get("reset_orientation")))
 
@@ -87,8 +94,8 @@ def _load_aura_runtime_config() -> None:
         "AURA_GRASP_MIN_HEIGHT_FRACTION": ("grasp_min_height_fraction", 0.10),
         "AURA_BASKET_PLANNING_MARGIN": ("basket_planning_margin_m", 0.03),
         "AURA_BASKET_PLACE_TABLE_CLEARANCE": ("basket_place_table_clearance_m", 0.003),
-        "AURA_MAX_GRASP_APPROACH_TILT_DEG": ("max_grasp_approach_tilt_deg", 60.0),
-        "AURA_TARGET_GRASP_APPROACH_TILT_DEG": ("target_grasp_approach_tilt_deg", 55.0),
+        "AURA_MAX_GRASP_APPROACH_TILT_DEG": ("max_grasp_approach_tilt_deg", 15.0),
+        "AURA_TARGET_GRASP_APPROACH_TILT_DEG": ("target_grasp_approach_tilt_deg", 10.0),
         "AURA_ACTION_WAYPOINT_LIMIT": ("action_waypoint_limit", 3),
         "AURA_GRIPPER_CLOSE_FRAMES": ("gripper_close_frames", 20),
         "AURA_GRIPPER_MAX_EFFORT": ("gripper_max_effort_n", 3.0),
@@ -126,6 +133,10 @@ def _load_aura_runtime_config() -> None:
         "AURA_CARRY_CARTESIAN_WAYPOINT_SPACING": ("carry_cartesian_waypoint_spacing_m", 0.12),
         "AURA_CARRY_MAX_JOINT_STEP": ("carry_max_joint_step_rad", 0.016),
         "AURA_CARRY_MIN_FRAMES": ("carry_min_frames", 20),
+        "AURA_CARRY_REPLAN_CHECK_WAYPOINTS": ("carry_replan_check_waypoints", 4),
+        "AURA_CARRY_REPLAN_POSITION_TOLERANCE_M": ("carry_replan_position_tolerance_m", 0.02),
+        "AURA_CARRY_REPLAN_MAX_ATTEMPTS": ("carry_replan_max_attempts", 3),
+        "AURA_CARRY_REPLAN_FRAME_COUNT": ("carry_replan_frame_count", 2),
         "AURA_GRASP_REFINEMENT_STEPS": ("grasp_refinement_steps", 0),
         "AURA_CARRY_APEX_CLEARANCE": ("carry_apex_clearance_m", 0.15),
         "AURA_DUAL_ARM_MIN_TCP_SEPARATION": ("dual_arm_min_tcp_separation_m", 0.18),
@@ -167,6 +178,10 @@ from aura_isaac_bridge.core.state import (
     DEFAULT_GRASPNET_DIR, DEFAULT_SAM_MODEL_PATH,
     CAMERA_PRIM_PATH, CAMERA_RESOLUTION, CAMERA_PREVIEW_RESOLUTION,
     SHOW_GRASP_DEBUG, USE_GRASPNET, USE_GRASPNET_ORIENTATION,
+    GRASPNET_FUSION_FRAME_COUNT, GRASPNET_FUSION_FRAME_INTERVAL_SEC,
+    GRASPNET_FUSION_MAX_POSITION_DISPERSION_M,
+    GRASPNET_FUSION_MAX_ORIENTATION_DISPERSION_DEG,
+    GRASPNET_FUSION_POSITION_OUTLIER_FLOOR_M, GRASPNET_FUSION_MIN_CONFIDENCE,
     DACH_SCENE_ROOT_PATH, DACH_ARTICULATION_ROOT_PATH,
     TRON2_URDF_PATH, DACH_ROBOT_DESCRIPTION_PATH, DACH_RIGHT_ROBOT_DESCRIPTION_PATH,
     DACH_LEFT_RRT_CONFIG_PATH, DACH_RIGHT_RRT_CONFIG_PATH,
@@ -185,6 +200,8 @@ from aura_isaac_bridge.core.state import (
     DACH_PATH_CLEARANCE, TRAJECTORY_MAX_JOINT_STEP, TRAJECTORY_MIN_FRAMES,
     TRAJECTORY_SETTLE_FRAMES, GRASP_APPROACH_MAX_JOINT_STEP,
     GRASP_APPROACH_MIN_FRAMES, CARTESIAN_WAYPOINT_SPACING, CARRY_APEX_CLEARANCE,
+    CARRY_REPLAN_CHECK_WAYPOINTS, CARRY_REPLAN_POSITION_TOLERANCE_M,
+    CARRY_REPLAN_MAX_ATTEMPTS, CARRY_REPLAN_FRAME_COUNT,
     MIN_GRIPPER_TABLE_CLEARANCE, TABLE_CLEARANCE_ABORT_MARGIN,
     DUAL_ARM_MIN_TCP_SEPARATION,
     GRIPPER_CLOSE_FRAMES, GRIPPER_MAX_EFFORT, GRIPPER_STIFFNESS, GRIPPER_DAMPING,

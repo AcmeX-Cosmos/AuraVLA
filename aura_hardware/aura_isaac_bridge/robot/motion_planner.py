@@ -64,8 +64,10 @@ class SparseKeyposeDiffuser:
         total_length = self._polyline_length(path)
         if total_length <= 1e-9:
             return 1
+        segment_count = max(path.shape[0] - 1, 1)
         return max(
             int(self.config.min_frames),
+            segment_count * 4,
             int(
                 np.ceil(
                     1.875
@@ -178,41 +180,106 @@ class SparseKeyposeDiffuser:
             return np.repeat(path, frame_count, axis=0)
         segment_deltas = np.diff(path, axis=0)
         segment_lengths = np.max(np.abs(segment_deltas), axis=1)
+        frame_count = max(int(frame_count), len(segment_lengths))
         total_length = float(np.sum(segment_lengths))
         if total_length <= 1e-9:
             return np.repeat(path[-1:], frame_count, axis=0)
 
-        cumulative_lengths = np.concatenate(([0.0], np.cumsum(segment_lengths)))
-        progress = minimum_jerk(np.arange(1, frame_count + 1) / frame_count)
-        distances = progress * total_length
+        # Parameterize every planner segment independently. A single global
+        # interpolation crosses RRT corners at non-zero velocity, creating a
+        # visible wrist kick that can shake a friction-held payload loose.
+        # Minimum jerk per segment reaches every corner with zero velocity and
+        # acceleration, so adjacent segments remain C2 continuous.
+        raw_counts = frame_count * segment_lengths / total_length
+        frame_counts = np.maximum(np.floor(raw_counts).astype(int), 1)
+        remaining = int(frame_count - np.sum(frame_counts))
+        if remaining > 0:
+            order = np.argsort(-(raw_counts - np.floor(raw_counts)))
+            for index in order[:remaining]:
+                frame_counts[index] += 1
+        elif remaining < 0:
+            order = np.argsort(raw_counts - np.floor(raw_counts))
+            for index in order:
+                if remaining == 0:
+                    break
+                removable = min(frame_counts[index] - 1, -remaining)
+                frame_counts[index] -= removable
+                remaining += removable
+
         samples = []
-        for distance in distances:
-            segment_index = min(
-                int(
-                    np.searchsorted(
-                        cumulative_lengths[1:],
-                        distance,
-                        side="right",
-                    )
-                ),
-                len(segment_lengths) - 1,
+        for segment_index, segment_frames in enumerate(frame_counts):
+            progress = minimum_jerk(
+                np.arange(1, segment_frames + 1) / segment_frames
             )
-            segment_length = float(segment_lengths[segment_index])
-            local_progress = (
-                1.0
-                if segment_length <= 1e-9
-                else np.clip(
-                    (distance - cumulative_lengths[segment_index]) / segment_length,
-                    0.0,
-                    1.0,
-                )
-            )
-            samples.append(
-                path[segment_index]
-                + local_progress * segment_deltas[segment_index]
+            samples.extend(
+                path[segment_index] + value * segment_deltas[segment_index]
+                for value in progress
             )
         samples[-1] = path[-1].copy()
         return np.asarray(samples, dtype=float)
+
+
+def container_place_candidates(
+    container_min,
+    container_max,
+    payload_half_extents,
+    base_xy,
+    *,
+    wall_margin_m: float = 0.012,
+) -> np.ndarray:
+    """Return contained XY placement candidates ordered by practical value."""
+    lower = np.asarray(container_min, dtype=float).reshape(-1)[:2]
+    upper = np.asarray(container_max, dtype=float).reshape(-1)[:2]
+    half_extents = np.asarray(payload_half_extents, dtype=float).reshape(-1)[:2]
+    base = np.asarray(base_xy, dtype=float).reshape(2)
+    if np.any(upper <= lower) or np.any(half_extents < 0.0):
+        raise ValueError("Container bounds and payload extents must be valid")
+
+    usable_lower = lower + half_extents + float(wall_margin_m)
+    usable_upper = upper - half_extents - float(wall_margin_m)
+    center = 0.5 * (lower + upper)
+    if np.any(usable_lower > usable_upper):
+        return center.reshape(1, 2)
+
+    center = np.clip(center, usable_lower, usable_upper)
+    direction = base - center
+    direction_norm = float(np.linalg.norm(direction))
+    direction = (
+        direction / direction_norm
+        if direction_norm > 1e-9
+        else np.array([1.0, 0.0], dtype=float)
+    )
+    cross = np.array([-direction[1], direction[0]], dtype=float)
+
+    def distance_to_boundary(axis):
+        distances = []
+        for index in range(2):
+            if axis[index] > 1e-9:
+                distances.append((usable_upper[index] - center[index]) / axis[index])
+            elif axis[index] < -1e-9:
+                distances.append((usable_lower[index] - center[index]) / axis[index])
+        return max(min(distances, default=0.0), 0.0)
+
+    near_span = distance_to_boundary(direction)
+    cross_span = min(
+        distance_to_boundary(cross),
+        distance_to_boundary(-cross),
+    )
+    proposed = [
+        center,
+        center + 0.70 * near_span * direction,
+        center + 0.45 * near_span * direction,
+        center + 0.55 * near_span * direction + 0.45 * cross_span * cross,
+        center + 0.55 * near_span * direction - 0.45 * cross_span * cross,
+        center + 0.55 * cross_span * cross,
+        center - 0.55 * cross_span * cross,
+    ]
+    candidates = []
+    for point in proposed:
+        point = np.clip(point, usable_lower, usable_upper)
+        if not any(np.linalg.norm(point - existing) < 1e-5 for existing in candidates):
+            candidates.append(point)
+    return np.asarray(candidates, dtype=float)
 
 
 def shift_grasp_toward_base(

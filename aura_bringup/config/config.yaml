@@ -3,12 +3,15 @@ nvidia:
   # Add up to three independent NVIDIA keys here. When non-empty, the agent
   # sends one copy of each request concurrently and keeps the first valid JSON.
   # Prefer environment variables for keys in shared repositories.
-  api_keys: []
+  api_keys: ["Bearer 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",
+             "Bearer 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",
+             "Bearer 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"]
 
   model: "nvidia/nemotron-nano-12b-v2-vl"
   base_url: "https://integrate.api.nvidia.com/v1"
   request_timeout_sec: 300
-  parallel_request_timeout_sec: 60
+  parallel_request_timeout_sec: 20
+  parallel_max_retries: 0
   max_retries: 2
   retry_backoff_sec: 0.75
   max_tokens: 768
@@ -28,8 +31,8 @@ agent:
     "5": "/reload"
     "6": "/camera"
     "7": "现在画面中有什么物体"
-  # Used only after retryable NVIDIA 429/5xx or connection failures. These
-  # semantic routes still pass through TaskPlanner, GraspNet, and Isaac safety.
+  # Used only after retryable NVIDIA failures. Successful requests always use
+  # the NVIDIA response before TaskPlanner, GraspNet, and Isaac execution.
   fallback_tasks:
     "把香蕉放进篮子里": {object_name: banana, target_name: basket}
     "把杯子放进篮子里": {object_name: mug, target_name: basket}
@@ -41,7 +44,9 @@ runtime:
 
 visualization:
   path:
-    enabled: true
+    # Disabled by default: USD path markers add FK/USD update overhead and are
+    # not part of task execution or verification.
+    enabled: false
     refresh_interval_sec: 0.5
     root_prim_path: "/World/AuraDebug/PlannedPath"
 
@@ -57,6 +62,14 @@ perception:
     enabled: true
     camera_offset_m: [0.000094005, 0.021269485, 0.018609223]
     max_correction_m: 0.06
+  graspnet_fusion:
+    # Fuse a short burst of fresh RGB-D observations before IK planning.
+    frame_count: 3
+    frame_interval_sec: 0.12
+    max_position_dispersion_m: 0.025
+    max_orientation_dispersion_deg: 25.0
+    position_outlier_floor_m: 0.012
+    min_confidence: 0.10
 
 execution:
   enabled: true
@@ -76,7 +89,9 @@ robot:
   grasp_min_height_fraction: 0.20
   banana_grasp_tilt_deg: 7.0
   banana_near_side_offset_m: 0.0
-  banana_min_short_axis_alignment: 0.85
+  # Keep the banana's projected closing width within the physical jaw
+  # aperture; 0.85 allowed the long axis to enter the grasp projection.
+  banana_min_short_axis_alignment: 0.98
   min_gripper_table_clearance_m: 0.0
   table_clearance_abort_margin_m: 0.0
   basket_place_table_clearance_m: 0.003
@@ -126,14 +141,22 @@ robot:
   trajectory_settle_frames: 3
   grasp_approach_max_joint_step_rad: 0.009
   grasp_approach_min_frames: 30
-  # A free rigid body needs a low-acceleration lift after contact. The old
-  # five-frame motion was only stable while S5 used an attachment joint.
-  grasp_lift_max_joint_step_rad: 0.008
-  grasp_lift_min_frames: 150
+  # Target a 20-frame minimum-jerk lift; larger joint-space motions may add
+  # frames automatically to stay below this per-frame step limit.
+  grasp_lift_max_joint_step_rad: 0.03
+  grasp_lift_min_frames: 20
   action_waypoint_limit: 3
   cartesian_waypoint_spacing_m: 0.04
   transport_lift_height_m: 0.16
   carry_cartesian_waypoint_spacing_m: 0.12
+  carry_max_joint_step_rad: 0.016
+  carry_min_frames: 20
+  # Re-observe the held object after short route chunks. A deviation triggers
+  # a bounded Lula replan while the gripper remains closed.
+  carry_replan_check_waypoints: 4
+  carry_replan_position_tolerance_m: 0.02
+  carry_replan_max_attempts: 3
+  carry_replan_frame_count: 2
   grasp_refinement_steps: 1
   carry_apex_clearance_m: 0.15
   dual_arm_min_tcp_separation_m: 0.14

@@ -7,6 +7,20 @@ from typing import Any
 from aura_planning.schemas import TaskPlan, dumps_json, loads_json
 
 
+def _json_compatible(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _json_compatible(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_compatible(item) for item in value]
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        return _json_compatible(tolist())
+    item = getattr(value, "item", None)
+    if callable(item):
+        return _json_compatible(item())
+    return value
+
+
 class PickPlaceExecutor:
     """Adapter around the existing execute_pick_place(object_name, target_name)."""
 
@@ -85,7 +99,7 @@ class PickPlaceExecutor:
         if isinstance(value, tuple) and len(value) >= 2:
             return bool(value[0]), str(value[1]), {}
         if isinstance(value, Mapping):
-            result = dict(value)
+            result = _json_compatible(value)
             success = bool(result.pop("success", False))
             message = str(result.pop("message", result.pop("reason", "")))
             return success, message, result

@@ -122,9 +122,33 @@ GRASPNET_CALIBRATION_MAX_CORRECTION = max(
     float(os.environ.get("AURA_GRASPNET_CALIBRATION_MAX_CORRECTION_M", "0.06")),
     0.0,
 )
+GRASPNET_FUSION_FRAME_COUNT = max(
+    int(os.environ.get("AURA_GRASPNET_FUSION_FRAME_COUNT", "3")), 1
+)
+GRASPNET_FUSION_FRAME_INTERVAL_SEC = max(
+    float(os.environ.get("AURA_GRASPNET_FUSION_FRAME_INTERVAL_SEC", "0.12")), 0.0
+)
+GRASPNET_FUSION_MAX_POSITION_DISPERSION_M = max(
+    float(os.environ.get("AURA_GRASPNET_FUSION_MAX_POSITION_DISPERSION_M", "0.025")),
+    0.001,
+)
+GRASPNET_FUSION_MAX_ORIENTATION_DISPERSION_DEG = max(
+    float(os.environ.get("AURA_GRASPNET_FUSION_MAX_ORIENTATION_DISPERSION_DEG", "25.0")),
+    0.1,
+)
+GRASPNET_FUSION_POSITION_OUTLIER_FLOOR_M = max(
+    float(os.environ.get("AURA_GRASPNET_FUSION_POSITION_OUTLIER_FLOOR_M", "0.012")),
+    0.001,
+)
+GRASPNET_FUSION_MIN_CONFIDENCE = float(
+    np.clip(float(os.environ.get("AURA_GRASPNET_FUSION_MIN_CONFIDENCE", "0.10")), 0.0, 1.0)
+)
 
-MAX_GRASP_APPROACH_TILT_RAD = np.radians(float(os.environ.get("AURA_MAX_GRASP_APPROACH_TILT_DEG", "60.0")))
-TARGET_GRASP_APPROACH_TILT_RAD = np.radians(float(os.environ.get("AURA_TARGET_GRASP_APPROACH_TILT_DEG", "55.0")))
+# Desktop pick-and-place should remain predominantly top-down. The launcher
+# may override these values from config, but standalone runtime defaults must
+# keep the same conservative posture constraint.
+MAX_GRASP_APPROACH_TILT_RAD = np.radians(float(os.environ.get("AURA_MAX_GRASP_APPROACH_TILT_DEG", "15.0")))
+TARGET_GRASP_APPROACH_TILT_RAD = np.radians(float(os.environ.get("AURA_TARGET_GRASP_APPROACH_TILT_DEG", "10.0")))
 GRASP_REFINEMENT_STEPS = max(int(os.environ.get("AURA_GRASP_REFINEMENT_STEPS", "0")), 0)
 BANANA_GRIPPER_CLOSE_POSITION = float(os.environ.get("AURA_BANANA_GRIPPER_CLOSE_POSITION", "0.0"))
 BANANA_PLANAR_REFINEMENT_STEPS = max(int(os.environ.get("AURA_BANANA_PLANAR_REFINEMENT_STEPS", "2")), 0)
@@ -178,6 +202,19 @@ CARRY_MAX_JOINT_STEP = max(
 )
 CARRY_MIN_FRAMES = max(
     int(os.environ.get("AURA_CARRY_MIN_FRAMES", "20")), 20
+)
+CARRY_REPLAN_CHECK_WAYPOINTS = max(
+    int(os.environ.get("AURA_CARRY_REPLAN_CHECK_WAYPOINTS", "4")), 1
+)
+CARRY_REPLAN_POSITION_TOLERANCE_M = max(
+    float(os.environ.get("AURA_CARRY_REPLAN_POSITION_TOLERANCE_M", "0.02")),
+    0.001,
+)
+CARRY_REPLAN_MAX_ATTEMPTS = max(
+    int(os.environ.get("AURA_CARRY_REPLAN_MAX_ATTEMPTS", "3")), 0
+)
+CARRY_REPLAN_FRAME_COUNT = max(
+    int(os.environ.get("AURA_CARRY_REPLAN_FRAME_COUNT", "2")), 1
 )
 MIN_GRIPPER_TABLE_CLEARANCE = float(os.environ.get("AURA_MIN_GRIPPER_TABLE_CLEARANCE", "0.012"))
 TABLE_CLEARANCE_ABORT_MARGIN = float(os.environ.get("AURA_TABLE_CLEARANCE_ABORT_MARGIN", "0.006"))
@@ -253,7 +290,9 @@ state = SimpleNamespace(
     planning_basket_obstacle=None,
     planning_basket_obstacle_enabled=False,
     _graspnet_demo=None,
+    _graspnet_net=None,
     _graspnet_imported=False,
+    _sam_model=None,
     _camera_preview_window=None,
     _camera_preview_provider=None,
     right_gripper=None,

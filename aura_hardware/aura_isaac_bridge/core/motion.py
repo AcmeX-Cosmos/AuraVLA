@@ -95,6 +95,27 @@ def _max_path_approach_axis_error(joint_targets, desired_orientation):
     return max_error
 
 
+def _max_path_downward_tilt(joint_targets):
+    """Return the largest absolute TCP tilt away from world-down."""
+    if not joint_targets:
+        return 0.0
+    frame_name = state.controller.kinematics.get_end_effector_frame()
+    downward = np.array([0.0, 0.0, -1.0], dtype=float)
+    max_tilt = 0.0
+    for joints in joint_targets:
+        _, rotation = state.controller.lula.compute_forward_kinematics(
+            frame_name,
+            np.asarray(joints, dtype=float),
+        )
+        approach_axis = np.asarray(rotation, dtype=float)[:, 0]
+        approach_axis /= np.linalg.norm(approach_axis)
+        max_tilt = max(
+            max_tilt,
+            math.acos(np.clip(float(np.dot(approach_axis, downward)), -1.0, 1.0)),
+        )
+    return max_tilt
+
+
 def get_object_gripper_containment(prim_path, *, target_prim=None):
     """校验物体几何中心是否位于两片夹指的共同工作空间。
 
@@ -581,6 +602,9 @@ def _execute_dual_joint_trajectory(
     left_gripper_positions=None,
     right_gripper_positions=None,
     monitor_table_clearance=False,
+    payload_prim_path=None,
+    payload_prim=None,
+    minimum_payload_table_clearance=0.02,
     max_joint_step_rad=None,
     minimum_frames=None,
 ):
@@ -682,22 +706,43 @@ def _execute_dual_joint_trajectory(
         os.environ.get("AURA_CLEARANCE_VIOLATION_TOLERANCE_FRAMES", "3")
     )
     minimum_table_clearance = float("inf")
+    minimum_payload_clearance = float("inf")
     last_safe_left = left_start.copy()
     last_safe_right = right_start.copy()
 
     def verify_table_clearance(progress_label):
         nonlocal last_safe_left, last_safe_right, minimum_table_clearance
+        nonlocal minimum_payload_clearance
         nonlocal clearance_violation_streak
         if not monitor_table_clearance:
             return
         clearance = float(get_gripper_table_clearance())
         minimum_table_clearance = min(minimum_table_clearance, clearance)
-        if clearance < clearance_abort_threshold:
+        payload_clearance = float("inf")
+        if (
+            payload_prim_path is not None
+            and payload_prim is not None
+            and state.planning_table_surface_z is not None
+        ):
+            _, payload_bbox_min, _ = get_current_bbox_center(
+                get_current_stage(), payload_prim, payload_prim_path
+            )
+            payload_clearance = float(
+                payload_bbox_min[2] - state.planning_table_surface_z
+            )
+            minimum_payload_clearance = min(
+                minimum_payload_clearance, payload_clearance
+            )
+        unsafe_gripper = clearance < clearance_abort_threshold
+        unsafe_payload = payload_clearance < float(
+            minimum_payload_table_clearance
+        )
+        if unsafe_gripper or unsafe_payload:
             clearance_violation_streak += 1
             if clearance_violation_streak < clearance_violation_tolerance:
                 return
-            state.dach_left.teleport_arm_joint_positions(last_safe_left)
-            state.dach_arm.teleport_arm_joint_positions(last_safe_right)
+            state.dach_left.set_arm_joint_positions(last_safe_left)
+            state.dach_arm.set_arm_joint_positions(last_safe_right)
             state.dach_left.gripper.set_joint_positions(
                 state.GRIPPER_OPEN_POSITIONS
                 if left_gripper_positions is None
@@ -713,7 +758,9 @@ def _execute_dual_joint_trajectory(
                 f"{label} gripper table clearance safety stop "
                 f"at {progress_label}: "
                 f"observed={clearance:.4f} m, "
-                f"abort_threshold={clearance_abort_threshold:.4f} m"
+                f"abort_threshold={clearance_abort_threshold:.4f} m, "
+                f"payload_clearance={payload_clearance:.4f} m, "
+                f"payload_threshold={minimum_payload_table_clearance:.4f} m"
             )
         clearance_violation_streak = 0
         left_feedback = get_left_joint_positions()
@@ -782,6 +829,11 @@ def _execute_dual_joint_trajectory(
             f"🛡️ {label} 最小夹指桌面净空: "
             f"{minimum_table_clearance:.4f} m"
         )
+        if payload_prim_path is not None:
+            print(
+                f"🛡️ {label} 最小负载桌面净空: "
+                f"{minimum_payload_clearance:.4f} m"
+            )
     return trajectory
 
 
@@ -790,6 +842,9 @@ def _execute_joint_trajectory(
     joint_targets,
     gripper_positions=None,
     monitor_table_clearance=False,
+    payload_prim_path=None,
+    payload_prim=None,
+    minimum_payload_table_clearance=0.02,
     max_joint_step_rad=None,
     minimum_frames=None,
 ):
@@ -808,6 +863,9 @@ def _execute_joint_trajectory(
         left_gripper_positions=state.GRIPPER_OPEN_POSITIONS,
         right_gripper_positions=gripper_positions,
         monitor_table_clearance=monitor_table_clearance,
+        payload_prim_path=payload_prim_path,
+        payload_prim=payload_prim,
+        minimum_payload_table_clearance=minimum_payload_table_clearance,
         max_joint_step_rad=max_joint_step_rad,
         minimum_frames=minimum_frames,
     )
@@ -909,10 +967,19 @@ def plan_collision_free_keyposes(keyposes, orientation=None):
             diagnostic["task_space_tilt_error_deg"] = math.degrees(
                 path_tilt_error
             )
-            if path_tilt_error > math.radians(20.0):
+            path_downward_tilt = _max_path_downward_tilt(segment)
+            diagnostic["max_downward_tilt_deg"] = math.degrees(
+                path_downward_tilt
+            )
+            if (
+                path_tilt_error > MAX_GRASP_APPROACH_TILT_RAD
+                or path_downward_tilt > MAX_GRASP_APPROACH_TILT_RAD
+            ):
                 print(
                     f"↪️ sparse keypose {keypose_index}: RRT 中途倾斜偏差 "
-                    f"{math.degrees(path_tilt_error):.1f}° > 20°，"
+                    f"relative={math.degrees(path_tilt_error):.1f}°, "
+                    f"absolute={math.degrees(path_downward_tilt):.1f}° > "
+                    f"{math.degrees(MAX_GRASP_APPROACH_TILT_RAD):.1f}°，"
                     "拒绝执行该路径"
                 )
                 segment = None
@@ -939,13 +1006,20 @@ def plan_collision_free_keyposes(keyposes, orientation=None):
                     diagnostic["cspace_tilt_error_deg"] = math.degrees(
                         path_tilt_error
                     )
-                    if path_tilt_error <= math.radians(20.0):
-                        segment = candidate_segment
-                        diagnostic["cspace_rrt"] = True
-                        print(
-                            f"🧭 sparse keypose {keypose_index}: "
-                            "使用精确 IK 终点的关节空间 RRT 路径"
+                    if path_tilt_error <= MAX_GRASP_APPROACH_TILT_RAD:
+                        path_downward_tilt = _max_path_downward_tilt(
+                            candidate_segment
                         )
+                        diagnostic["max_downward_tilt_deg"] = math.degrees(
+                            path_downward_tilt
+                        )
+                        if path_downward_tilt <= MAX_GRASP_APPROACH_TILT_RAD:
+                            segment = candidate_segment
+                            diagnostic["cspace_rrt"] = True
+                            print(
+                                f"🧭 sparse keypose {keypose_index}: "
+                                "使用精确 IK 终点的关节空间 RRT 路径"
+                            )
         if segment is None:
             diagnostic["success"] = False
             print(
@@ -1221,6 +1295,12 @@ def move_ee_collision_aware_approach(
         f"🧭 {label}: 执行 {planner_name}，planner_waypoints={len(joint_targets)}, "
         f"planning_time={time.perf_counter() - planning_started:.2f} s"
     )
+    refinement_attempts = []
+    refinement_tilt_limit = (
+        MAX_GRASP_APPROACH_TILT_RAD
+        if maximum_approach_tilt_rad is None
+        else float(maximum_approach_tilt_rad)
+    )
     try:
         _execute_joint_trajectory(
             label,
@@ -1257,6 +1337,7 @@ def move_ee_collision_aware_approach(
             refinement_targets = []
             refined_orientation = None
             warm_start = current_joints.copy()
+            orientation_ready = False
             for alpha in np.linspace(0.01, 1.0, 100):
                 candidate_orientation = (
                     (1.0 - alpha) * actual_orientation
@@ -1270,8 +1351,12 @@ def move_ee_collision_aware_approach(
                     warm_start,
                 )
                 if not success:
-                    refinement_targets = []
-                    break
+                    refinement_attempts.append(
+                        {"alpha": float(alpha), "success": False}
+                    )
+                    if refinement_targets:
+                        break
+                    continue
                 warm_start = np.asarray(solution, dtype=float).reshape(-1)
                 refinement_targets.append(warm_start.copy())
                 refined_orientation = candidate_orientation.copy()
@@ -1310,12 +1395,22 @@ def move_ee_collision_aware_approach(
                 )
                 orientation_ready = (
                     closing_alignment >= float(minimum_closing_alignment)
-                    and refined_tilt <= TARGET_GRASP_APPROACH_TILT_RAD
+                    and refined_tilt
+                    <= refinement_tilt_limit + math.radians(0.25)
+                )
+                refinement_attempts.append(
+                    {
+                        "alpha": float(alpha),
+                        "success": True,
+                        "tilt_deg": float(np.degrees(refined_tilt)),
+                        "closing_alignment": closing_alignment,
+                        "ready": orientation_ready,
+                    }
                 )
                 if orientation_ready:
                     break
 
-            if refinement_targets:
+            if refinement_targets and orientation_ready:
                 refinement_goal = (
                     "香蕉短轴闭合姿态"
                     if desired_closing_axis is not None
@@ -1376,7 +1471,7 @@ def move_ee_collision_aware_approach(
         f"closing_alignment={closing_alignment:.3f}"
     )
     tilt_limit = (
-        np.radians(float(os.environ.get("AURA_MAX_GRASP_APPROACH_TILT_DEG", "60.0")))
+        MAX_GRASP_APPROACH_TILT_RAD
         if maximum_approach_tilt_rad is None
         else float(maximum_approach_tilt_rad)
     )
@@ -1396,6 +1491,7 @@ def move_ee_collision_aware_approach(
         "downward_tilt_deg": float(np.degrees(actual_tilt)),
         "closing_alignment": closing_alignment,
         "orientation_refined": orientation_refined,
+        "refinement_attempts": refinement_attempts,
         "hold_orientation": (
             None if hold_orientation is None else hold_orientation.tolist()
         ),
@@ -1448,6 +1544,7 @@ def close_gripper_slowly(
     finger_count = len(start_positions)
     contact_streaks = np.zeros(finger_count, dtype=int)
     contacted = np.zeros(finger_count, dtype=bool)
+    contact_hold_targets = start_positions.copy()
     previous_feedback = start_positions.copy()
     blocked_residuals = np.zeros_like(start_positions)
     commanded_positions = start_positions.copy()
@@ -1457,10 +1554,13 @@ def close_gripper_slowly(
         closing_positions = start_positions + alpha * (
             target_close - start_positions
         )
-        # The physical DACH linkage closes both jaws symmetrically. Do not
-        # freeze one simulated jaw on position lag; that creates an asymmetric
-        # gripper and was repeatedly stopping the left jaw at 26 mm with no
-        # measured contact force.
+        # Once a finger has sustained measured contact, keep only a small
+        # preload on that side while the independent opposite finger catches
+        # up. Continuing to drive the first-contact finger displaces a free
+        # object before the second finger can establish force.
+        closing_positions = np.where(
+            contacted, contact_hold_targets, closing_positions
+        )
         commanded_positions = closing_positions
         state.dach_arm.gripper.set_joint_positions(commanded_positions)
         hold_ee_target(hold_position, orientation)
@@ -1493,6 +1593,10 @@ def close_gripper_slowly(
         newly_contacted = (~contacted) & (contact_streaks >= 3)
         if np.any(newly_contacted):
             contacted[newly_contacted] = True
+            contact_hold_targets[newly_contacted] = np.maximum(
+                feedback[newly_contacted] - 0.0005,
+                target_close[newly_contacted],
+            )
             print(
                 "✅ 夹指持续受力接触: "
                 f"step={i + 1}, contacted={contacted.tolist()}, "
@@ -1605,22 +1709,18 @@ def close_gripper_slowly(
     final_residual = float(np.min(final_residuals))
     final_efforts = get_gripper_joint_efforts()
     effort_feedback_available = np.all(np.isfinite(final_efforts))
-    residual_contact_confirmed = bool(
-        np.all(final_residuals >= GRIPPER_CONTACT_PRELOAD_RESIDUAL)
-    )
-    effort_contact_confirmed = bool(
-        effort_feedback_available
-        and np.all(final_efforts >= GRIPPER_CONTACT_FORCE_THRESHOLD)
-    )
+    # Evaluate each independent finger using every physical feedback channel.
+    # One DACH jaw can report a near-zero effort while its position drive is
+    # visibly blocked by the object; discarding that residual whenever the
+    # effort array exists creates a false one-finger failure.
     final_finger_contacts = (
-        (final_efforts >= GRIPPER_CONTACT_FORCE_THRESHOLD)
-        if effort_feedback_available
-        else (final_residuals >= GRIPPER_CONTACT_PRELOAD_RESIDUAL)
+        (final_residuals >= GRIPPER_CONTACT_PRELOAD_RESIDUAL)
+        | (
+            np.isfinite(final_efforts)
+            & (final_efforts >= GRIPPER_CONTACT_FORCE_THRESHOLD)
+        )
     )
-    contact_confirmed = bool(
-        np.all(final_finger_contacts)
-        and (effort_contact_confirmed or residual_contact_confirmed)
-    )
+    contact_confirmed = bool(np.all(final_finger_contacts))
     return {
         "contact_confirmed": contact_confirmed,
         "finger_contacts": np.asarray(final_finger_contacts, dtype=bool),

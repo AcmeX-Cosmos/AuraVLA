@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import math
 import os
 import site
 import struct
@@ -36,8 +37,16 @@ from aura_isaac_bridge.core.state import (
     GRASP_POSITION_OFFSET, GRASP_INSERT_DEPTH,
     GRASPNET_CALIBRATION_ENABLED, GRASPNET_CAMERA_OFFSET,
     GRASPNET_CALIBRATION_MAX_CORRECTION,
+    GRASPNET_FUSION_FRAME_COUNT, GRASPNET_FUSION_FRAME_INTERVAL_SEC,
+    GRASPNET_FUSION_MAX_POSITION_DISPERSION_M,
+    GRASPNET_FUSION_MAX_ORIENTATION_DISPERSION_DEG,
+    GRASPNET_FUSION_POSITION_OUTLIER_FLOOR_M, GRASPNET_FUSION_MIN_CONFIDENCE,
 )
 from aura_isaac_bridge.core.physics import step_app
+from aura_isaac_bridge.core.grasp_fusion import (
+    GraspObservation,
+    fuse_grasp_observations,
+)
 
 def get_bbox_center(stage, prim_path):
     prim = stage.GetPrimAtPath(prim_path)
@@ -317,21 +326,67 @@ def transform_sim_world_points_to_usd(target_prim, points):
 
 def get_current_bbox_center(stage, target_prim, prim_path=None):
     prim_path = str(prim_path or target_prim.prim_path)
-    _, bbox_min, bbox_max = get_bbox_center(stage, prim_path)
-    usd_corners = np.asarray(
-        [
-            [x, y, z]
-            for x in (bbox_min[0], bbox_max[0])
-            for y in (bbox_min[1], bbox_max[1])
-            for z in (bbox_min[2], bbox_max[2])
-        ],
-        dtype=float,
-    )
-    sim_corners = transform_usd_world_points_to_sim(target_prim, usd_corners)
+    cache = getattr(state, "_local_bbox_corner_cache", None)
+    if cache is None:
+        cache = {}
+        state._local_bbox_corner_cache = cache
+    local_corners = cache.get(prim_path)
+    if local_corners is None:
+        root = stage.GetPrimAtPath(prim_path)
+        if not root.IsValid():
+            raise RuntimeError(f"无法计算局部包围盒，Prim 不存在: {prim_path}")
+        xform_cache = UsdGeom.XformCache(Usd.TimeCode.Default())
+        root_to_world = xform_cache.GetLocalToWorldTransform(root)
+        world_to_root = root_to_world.GetInverse()
+        local_point_clouds = []
+        for prim in Usd.PrimRange(root):
+            if not prim.IsA(UsdGeom.Mesh):
+                continue
+            points = UsdGeom.Mesh(prim).GetPointsAttr().Get() or []
+            if not points:
+                continue
+            mesh_to_world = xform_cache.GetLocalToWorldTransform(prim)
+            local_point_clouds.append(
+                np.asarray(
+                    [
+                        world_to_root.Transform(
+                            mesh_to_world.Transform(
+                                Gf.Vec3d(
+                                    float(point[0]),
+                                    float(point[1]),
+                                    float(point[2]),
+                                )
+                            )
+                        )
+                        for point in points
+                    ],
+                    dtype=float,
+                )
+            )
+        if not local_point_clouds:
+            raise RuntimeError(
+                f"无法计算局部包围盒，Prim 下没有 Mesh: {prim_path}"
+            )
+        local_points = np.concatenate(local_point_clouds, axis=0)
+        local_min = np.min(local_points, axis=0)
+        local_max = np.max(local_points, axis=0)
+        local_corners = np.asarray(
+            [
+                [x, y, z]
+                for x in (local_min[0], local_max[0])
+                for y in (local_min[1], local_max[1])
+                for z in (local_min[2], local_max[2])
+            ],
+            dtype=float,
+        )
+        cache[prim_path] = local_corners
+
+    sim_position, sim_orientation, _ = get_sim_pose(target_prim)
+    sim_rotation = quat_to_rot_matrix(sim_orientation)
+    sim_corners = local_corners @ sim_rotation.T + sim_position
     sim_min = np.min(sim_corners, axis=0)
     sim_max = np.max(sim_corners, axis=0)
     return (sim_min + sim_max) * 0.5, sim_min, sim_max
-
 
 def get_current_mesh_horizontal_cross_section_center(
     stage,
@@ -501,9 +556,12 @@ def segment_target_with_sam(stage, camera, target_prim, rgb_data, prim_path=None
         rgb_data,
         prim_path=prim_path or target_prim.prim_path,
     )
-    show_camera_preview(rgb_data, prompt_points, prompt_labels)
-    print(f"🧠 加载 SAM 模型: {SAM_MODEL_PATH}")
-    sam_model = SAM(SAM_MODEL_PATH)
+    if SHOW_GRASP_DEBUG:
+        show_camera_preview(rgb_data, prompt_points, prompt_labels)
+    if state._sam_model is None:
+        print(f"🧠 加载 SAM 模型: {SAM_MODEL_PATH}")
+        state._sam_model = SAM(SAM_MODEL_PATH)
+    sam_model = state._sam_model
     results = sam_model(
         rgb_data,
         points=prompt_points.copy(),
@@ -555,6 +613,8 @@ def ensure_graspnet_python_dependencies():
         )
 
 def load_graspnet_demo():
+    if state._graspnet_demo is not None:
+        return state._graspnet_demo
     ensure_graspnet_python_dependencies()
     demo_path = GRASPNET_DIR / "demo.py"
     if not demo_path.is_file():
@@ -598,6 +658,20 @@ def load_graspnet_demo():
         raise RuntimeError(f"{demo_path} 不包含 demo_variable，请使用 section3 提供的改版 demo.py。")
     if hasattr(demo_module, "cfgs"):
         demo_module.cfgs.checkpoint_path = str(GRASPNET_CHECKPOINT_PATH)
+    # The upstream demo creates and loads the network inside every
+    # demo_variable call. Keep the upstream API but make the model process
+    # resident for Aura's temporal RGB-D burst.
+    original_get_net = getattr(demo_module, "get_net", None)
+    if original_get_net is not None and not getattr(demo_module, "_aura_cached_get_net", False):
+        def cached_get_net():
+            if state._graspnet_net is None:
+                state._graspnet_net = original_get_net()
+            return state._graspnet_net
+
+        demo_module.get_net = cached_get_net
+        demo_module._aura_cached_get_net = True
+    state._graspnet_demo = demo_module
+    state._graspnet_imported = True
     return demo_module
 
 def release_cuda_inference_cache():
@@ -632,14 +706,71 @@ def _apply_graspnet_camera_calibration(
     return np.asarray(grasp_position, dtype=float) + correction_world, correction_world
 
 
-def infer_graspnet_world_pose(
+def _graspnet_observation_from_frame(
+    demo_module,
+    rgb_data,
+    depth_mm,
+    mask,
+    intrinsic,
+    camera_position,
+    camera_orientation,
+):
+    valid_mask = mask.astype(bool)
+    valid_depth = valid_mask & (depth_mm > 0)
+    valid_ratio = float(np.count_nonzero(valid_depth)) / max(float(np.count_nonzero(valid_mask)), 1.0)
+    if valid_ratio <= 0.05:
+        raise RuntimeError("SAM 掩码区域有效深度不足")
+    detected_grasp = demo_module.demo_variable(
+        rgb_data,
+        depth_mm,
+        mask,
+        intrinsic,
+    )
+    if detected_grasp is None:
+        raise RuntimeError("GraspNet 未返回抓取候选。")
+    world_from_camera = get_transform(camera_position, quat_to_rot_matrix(camera_orientation))
+    camera_from_grasp = get_transform(detected_grasp.translation, detected_grasp.rotation_matrix)
+    camera_axis_correction = get_transform([0, 0, 0], [[1, 0, 0], [0, -1, 0], [0, 0, -1]])
+    gripper_axis_correction = get_transform([0, 0, 0], [[0, 0, 1], [0, -1, 0], [1, 0, 0]])
+    world_from_grasp = (
+        world_from_camera
+        @ camera_axis_correction
+        @ camera_from_grasp
+        @ gripper_axis_correction
+    )
+    grasp_approach_direction = world_from_grasp[:3, 2]
+    grasp_approach_direction /= max(float(np.linalg.norm(grasp_approach_direction)), 1e-9)
+    grasp_position = (
+        world_from_grasp[:3, 3]
+        + GRASP_POSITION_OFFSET
+        + grasp_approach_direction * GRASP_INSERT_DEPTH
+    )
+    grasp_position, calibration_world_offset = _apply_graspnet_camera_calibration(
+        grasp_position,
+        np.asarray(camera_position, dtype=float),
+        np.asarray(camera_orientation, dtype=float),
+    )
+    return GraspObservation(
+        position=grasp_position,
+        orientation=rot_matrix_to_quat(world_from_grasp[:3, :3]),
+        score=float(getattr(detected_grasp, "score", 1.0)),
+        depth_quality=valid_ratio,
+        geometric_validity=1.0 if np.all(np.isfinite(grasp_position)) else 0.0,
+    ), calibration_world_offset
+
+
+def infer_graspnet_fused_world_pose(
     stage,
     camera,
     target_prim,
     *,
+    frame_count=GRASPNET_FUSION_FRAME_COUNT,
+    frame_interval_sec=GRASPNET_FUSION_FRAME_INTERVAL_SEC,
     apply_calibration=True,
 ):
+    """Infer a stable world grasp pose from a short fresh RGB-D burst."""
     demo_module = load_graspnet_demo()
+    frame_count = max(int(frame_count), 1)
     rgb_data, depth_mm = capture_camera_data(camera)
     mask = segment_target_with_sam(
         stage,
@@ -651,50 +782,111 @@ def infer_graspnet_world_pose(
     if not np.any(mask.astype(bool) & (depth_mm > 0)):
         raise RuntimeError("SAM 掩码区域没有有效深度，请检查相机视角、裁剪范围和目标提示点。")
     intrinsic = np.asarray(camera.get_intrinsics_matrix(), dtype=float)
-
-    print("🧠 开始 GraspNet 推理...")
-    detected_grasp = demo_module.demo_variable(rgb_data, depth_mm, mask, intrinsic)
-    if detected_grasp is None:
-        raise RuntimeError("GraspNet 未返回抓取候选。")
-
-    camera_position, camera_orientation = SingleXFormPrim(
-        name="grasp_camera_pose", prim_path=CAMERA_PRIM_PATH
-    ).get_world_pose()
-    world_from_camera = get_transform(camera_position, quat_to_rot_matrix(camera_orientation))
-    camera_from_grasp = get_transform(detected_grasp.translation, detected_grasp.rotation_matrix)
-    camera_axis_correction = get_transform([0, 0, 0], [[1, 0, 0], [0, -1, 0], [0, 0, -1]])
-    gripper_axis_correction = get_transform([0, 0, 0], [[0, 0, 1], [0, -1, 0], [1, 0, 0]])
-    world_from_grasp = world_from_camera @ camera_axis_correction @ camera_from_grasp @ gripper_axis_correction
-
-    grasp_approach_direction = world_from_grasp[:3, 2]
-    grasp_approach_direction /= np.linalg.norm(grasp_approach_direction)
-    grasp_position = (
-        world_from_grasp[:3, 3]
-        + GRASP_POSITION_OFFSET
-        + grasp_approach_direction * GRASP_INSERT_DEPTH
+    _, target_bbox_min, target_bbox_max = get_current_bbox_center(
+        stage, target_prim, target_prim.prim_path
     )
-    if apply_calibration:
-        grasp_position, calibration_world_offset = _apply_graspnet_camera_calibration(
-            grasp_position,
-            np.asarray(camera_position, dtype=float),
-            np.asarray(camera_orientation, dtype=float),
-        )
-        if GRASPNET_CALIBRATION_ENABLED:
-            print(
-                "📐 GraspNet 相机标定修正: "
-                f"camera_offset={GRASPNET_CAMERA_OFFSET}, "
-                f"world_offset={calibration_world_offset}"
+    expanded_bbox_min = np.asarray(target_bbox_min, dtype=float) - 0.01
+    expanded_bbox_max = np.asarray(target_bbox_max, dtype=float) + 0.01
+    observations = []
+    started = time.perf_counter()
+    calibration_offsets = []
+    for frame_index in range(frame_count):
+        if frame_index:
+            frame_steps = max(1, int(math.ceil(float(frame_interval_sec) * 60.0)))
+            step_app(frame_steps)
+            rgb_data, depth_mm = capture_camera_data(camera)
+        camera_position, camera_orientation = SingleXFormPrim(
+            name="grasp_camera_pose", prim_path=CAMERA_PRIM_PATH
+        ).get_world_pose()
+        try:
+            observation, calibration_offset = _graspnet_observation_from_frame(
+                demo_module,
+                rgb_data,
+                depth_mm,
+                mask,
+                intrinsic,
+                camera_position,
+                camera_orientation,
             )
-    grasp_orientation = rot_matrix_to_quat(world_from_grasp[:3, :3])
-    visualization_path = "/World/GraspVisualization"
-    if not stage.GetPrimAtPath(visualization_path).IsValid():
-        UsdGeom.Xform.Define(stage, visualization_path)
-    grasp_visualization = SingleXFormPrim(name="grasp_visualization", prim_path=visualization_path)
-    grasp_visualization.set_world_pose(position=grasp_position, orientation=grasp_orientation)
-    print(f"✅ GraspNet 抓取位置: {grasp_position}")
-    print(f"✅ GraspNet 抓取姿态(wxyz): {grasp_orientation}")
-    print(f"✅ 抓取点沿接近方向深入: {GRASP_INSERT_DEPTH:.3f} m")
-    return np.asarray(grasp_position, dtype=float), np.asarray(grasp_orientation, dtype=float)
+        except Exception as exc:
+            print(f"⚠️ GraspNet 第 {frame_index + 1}/{frame_count} 帧无效: {exc}")
+            continue
+        outside_distance = np.maximum(expanded_bbox_min - observation.position, 0.0)
+        outside_distance += np.maximum(observation.position - expanded_bbox_max, 0.0)
+        geometry_quality = float(
+            math.exp(-float(np.linalg.norm(outside_distance)) / 0.02)
+        )
+        observation = GraspObservation(
+            position=observation.position,
+            orientation=observation.orientation,
+            score=observation.score,
+            depth_quality=observation.depth_quality,
+            geometric_validity=geometry_quality,
+        )
+        if not apply_calibration:
+            observation = GraspObservation(
+                position=observation.position - calibration_offset,
+                orientation=observation.orientation,
+                score=observation.score,
+                depth_quality=observation.depth_quality,
+                geometric_validity=observation.geometric_validity,
+            )
+        observations.append(observation)
+        calibration_offsets.append(
+            calibration_offset if apply_calibration else np.zeros(3, dtype=float)
+        )
+
+    fused = fuse_grasp_observations(
+        observations,
+        max_position_dispersion_m=GRASPNET_FUSION_MAX_POSITION_DISPERSION_M,
+        max_orientation_dispersion_deg=GRASPNET_FUSION_MAX_ORIENTATION_DISPERSION_DEG,
+        position_outlier_floor_m=GRASPNET_FUSION_POSITION_OUTLIER_FLOOR_M,
+        min_confidence=GRASPNET_FUSION_MIN_CONFIDENCE,
+    )
+    grasp_position = np.asarray(fused["position"], dtype=float)
+    grasp_orientation = np.asarray(fused["orientation"], dtype=float)
+    if SHOW_GRASP_DEBUG:
+        visualization_path = "/World/GraspVisualization"
+        if not stage.GetPrimAtPath(visualization_path).IsValid():
+            UsdGeom.Xform.Define(stage, visualization_path)
+        grasp_visualization = SingleXFormPrim(
+            name="grasp_visualization", prim_path=visualization_path
+        )
+        grasp_visualization.set_world_pose(
+            position=grasp_position, orientation=grasp_orientation
+        )
+    fused["calibration_offset_world"] = (
+        np.mean(np.asarray(calibration_offsets, dtype=float), axis=0).tolist()
+        if calibration_offsets else [0.0, 0.0, 0.0]
+    )
+    fused["inference_duration_sec"] = round(time.perf_counter() - started, 3)
+    print(
+        "✅ GraspNet 多帧融合: "
+        f"accepted={fused['accepted_frame_count']}/{fused['frame_count']}, "
+        f"position_std={fused['position_std_m']:.4f} m, "
+        f"orientation_dispersion={fused['orientation_dispersion_deg']:.2f} deg, "
+        f"confidence={fused['confidence']:.3f}"
+    )
+    return fused
+
+
+def infer_graspnet_world_pose(
+    stage,
+    camera,
+    target_prim,
+    *,
+    apply_calibration=True,
+):
+    """Backward-compatible single-frame API for diagnostics."""
+    result = infer_graspnet_fused_world_pose(
+        stage,
+        camera,
+        target_prim,
+        frame_count=1,
+        frame_interval_sec=0.0,
+        apply_calibration=apply_calibration,
+    )
+    return np.asarray(result["position"], dtype=float), np.asarray(result["orientation"], dtype=float)
 
 
 def resolve_scene_prim_path(name):

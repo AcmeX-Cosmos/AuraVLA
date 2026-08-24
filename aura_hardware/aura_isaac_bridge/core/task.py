@@ -1052,6 +1052,16 @@ def execute_pick_place(object_name, target_name):
         grasp_orientation = top_down_orientation
         graspnet_position_active = True
         grasp_strategy = "graspnet_temporal_fusion_position_top_down"
+        publish_transport_tracking({
+            "event": "graspnet_perception",
+            "state": "grasp_pose_fused",
+            "object_name": str(object_name),
+            "target_name": str(target_name),
+            "observed_position": object_position.tolist(),
+            "orientation": graspnet_fusion.get("orientation"),
+            "fusion": graspnet_fusion,
+            "replan": False,
+        })
         print(
             "🎯 使用 GraspNet 多帧融合 + 相机标定抓取点: "
             f"position={object_position}, "

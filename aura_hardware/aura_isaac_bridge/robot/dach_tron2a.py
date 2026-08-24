@@ -404,7 +404,14 @@ class DACHTron2AIKController:
     ) -> list[np.ndarray] | None:
         """Solve a complete Cartesian waypoint sequence with a continuous seed."""
         points = [np.asarray(point, dtype=float).reshape(3) for point in waypoints]
+        self.last_pose_waypoint_diagnostics = {
+            "waypoint_count": len(points),
+            "success": False,
+            "failure_index": None,
+            "failure_point": None,
+        }
         if not points:
+            self.last_pose_waypoint_diagnostics["success"] = True
             return []
         self.reset()
         if warm_start is None:
@@ -412,7 +419,7 @@ class DACHTron2AIKController:
         warm_start = self._valid_ik_seed(warm_start)
         joint_targets: list[np.ndarray] = []
         frame_name = self.kinematics.get_end_effector_frame()
-        for point in points:
+        for point_index, point in enumerate(points):
             solution, success = self.lula.compute_inverse_kinematics(
                 frame_name,
                 point,
@@ -430,6 +437,12 @@ class DACHTron2AIKController:
                     frame_name, point, None, warm_start
                 )
             if not success:
+                self.last_pose_waypoint_diagnostics.update(
+                    {
+                        "failure_index": point_index,
+                        "failure_point": point.tolist(),
+                    }
+                )
                 return None
             solution = np.asarray(solution, dtype=float).reshape(-1)
             if (
@@ -437,9 +450,17 @@ class DACHTron2AIKController:
                 or not np.all(np.isfinite(solution))
             ):
                 print(f"⚠️ DACH {self.robot.arm_side} IK 返回无效关节解")
+                self.last_pose_waypoint_diagnostics.update(
+                    {
+                        "failure_index": point_index,
+                        "failure_point": point.tolist(),
+                        "invalid_solution": True,
+                    }
+                )
                 return None
             warm_start = solution
             joint_targets.append(warm_start.copy())
+        self.last_pose_waypoint_diagnostics["success"] = True
         return joint_targets
 
     def plan_pose_waypoints_with_orientations(
