@@ -47,17 +47,18 @@ class IsaacCameraBridge:
         camera_prim_path: str = DEFAULT_CAMERA_PRIM_PATH,
         resolution: tuple[int, int] = DEFAULT_CAMERA_RESOLUTION,
         output_directory: str | Path | None = None,
-        update_every_frames: int = 15,
+        update_interval_sec: float = 12.0,
     ) -> None:
-        if update_every_frames < 1:
-            raise ValueError("update_every_frames must be positive")
+        if update_interval_sec <= 0.0:
+            raise ValueError("update_interval_sec must be positive")
         self._camera = camera
         self.camera_prim_path = camera_prim_path
         self.resolution = resolution
         self.paths = camera_bridge_paths(output_directory)
-        self.update_every_frames = update_every_frames
+        self.update_interval_sec = float(update_interval_sec)
         self._task: asyncio.Task[None] | None = None
         self._last_error: str | None = None
+        self._sequence = 0
 
     def start(self) -> "IsaacCameraBridge":
         if self._task is not None and not self._task.done():
@@ -117,6 +118,7 @@ class IsaacCameraBridge:
 
         self._write_png(self.paths.rgb, rgb_bgr)
         self._write_png(self.paths.depth, depth_visualization)
+        self._sequence += 1
         self._write_metadata(
             {
                 "camera_prim_path": self.camera_prim_path,
@@ -127,6 +129,8 @@ class IsaacCameraBridge:
                 "depth_shape": list(depth_array.shape),
                 "depth_near": float(near),
                 "depth_far": float(far),
+                "sequence": self._sequence,
+                "update_interval_sec": self.update_interval_sec,
             }
         )
         return self.paths
@@ -171,14 +175,17 @@ class IsaacCameraBridge:
         from omni.kit.app import get_app
 
         app = get_app()
+        last_capture = 0.0
         while True:
             try:
-                for _ in range(self.update_every_frames):
-                    await app.next_update_async()
-                self.capture_once()
-                if self._last_error is not None:
-                    print("Isaac RGBD bridge recovered")
-                    self._last_error = None
+                now = time.monotonic()
+                if now - last_capture >= self.update_interval_sec:
+                    self.capture_once()
+                    last_capture = now
+                    if self._last_error is not None:
+                        print("Isaac RGBD bridge recovered")
+                        self._last_error = None
+                await app.next_update_async()
             except asyncio.CancelledError:
                 return
             except Exception as exc:

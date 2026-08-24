@@ -57,17 +57,18 @@ class IsaacCameraBridge:
         camera_prim_path: str = DEFAULT_CAMERA_PRIM_PATH,
         resolution: tuple[int, int] = DEFAULT_CAMERA_RESOLUTION,
         output_directory: str | Path | None = None,
-        update_every_frames: int = 15,
+        update_interval_sec: float = 12.0,
     ) -> None:
-        if update_every_frames < 1:
-            raise ValueError("update_every_frames must be positive")
+        if update_interval_sec <= 0.0:
+            raise ValueError("update_interval_sec must be positive")
         self._camera = camera
         self.camera_prim_path = camera_prim_path
         self.resolution = resolution
         self.paths = camera_bridge_paths(output_directory)
-        self.update_every_frames = update_every_frames
+        self.update_interval_sec = float(update_interval_sec)
         self._task: asyncio.Task[None] | None = None
         self._last_error: str | None = None
+        self._sequence = 0
 
     def start(self) -> "IsaacCameraBridge":
         if self._task is not None and not self._task.done():
@@ -119,11 +120,11 @@ class IsaacCameraBridge:
         import numpy as np
 
         app = get_app()
-        frame_count = 0
+        last_capture = 0.0
         while True:
             try:
-                frame_count += 1
-                if frame_count % self.update_every_frames == 0:
+                now = time.monotonic()
+                if now - last_capture >= self.update_interval_sec:
                     rgb = self._read_frame("rgb", "rgba")
                     depth = self._read_frame(
                         "depth", "distance_to_image_plane", "distance"
@@ -143,24 +144,24 @@ class IsaacCameraBridge:
                             depth_array = np.asarray(depth)
                             depth_vis = self._depth_to_colormap(depth_array)
 
-                            # Save files
-                            cv2.imwrite(str(self.paths.rgb), rgb_bgr)
-                            cv2.imwrite(str(self.paths.depth), depth_vis)
+                            self._write_png(self.paths.rgb, rgb_bgr)
+                            self._write_png(self.paths.depth, depth_vis)
 
                             # Save metadata
                             # Keep this key aligned with the consumer in
                             # aura_perception.nvidia_agent. The old launcher
                             # used ``timestamp``, which made valid frames look
                             # permanently missing/stale to the agent.
+                            self._sequence += 1
                             metadata = {
                                 "captured_at_unix": time.time(),
                                 "camera_prim_path": self.camera_prim_path,
                                 "resolution": self.resolution,
+                                "sequence": self._sequence,
+                                "update_interval_sec": self.update_interval_sec,
                             }
-                            self.paths.metadata.write_text(
-                                json.dumps(metadata, ensure_ascii=False),
-                                encoding="utf-8",
-                            )
+                            self._write_json(self.paths.metadata, metadata)
+                            last_capture = now
                             self._last_error = None
 
                 await app.next_update_async()
@@ -171,6 +172,26 @@ class IsaacCameraBridge:
                     print(f"Camera bridge error: {exc}")
                     self._last_error = str(exc)
                 await app.next_update_async()
+
+    @staticmethod
+    def _write_png(path: Path, image: Any) -> None:
+        import cv2
+
+        encoded, buffer = cv2.imencode(".png", image)
+        if not encoded:
+            raise RuntimeError(f"Failed to encode camera image: {path.name}")
+        temporary_path = path.with_suffix(path.suffix + ".tmp")
+        temporary_path.write_bytes(buffer.tobytes())
+        os.replace(temporary_path, path)
+
+    @staticmethod
+    def _write_json(path: Path, value: dict[str, Any]) -> None:
+        temporary_path = path.with_suffix(path.suffix + ".tmp")
+        temporary_path.write_text(
+            json.dumps(value, ensure_ascii=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        os.replace(temporary_path, path)
 
     def _read_frame(self, *names: str) -> Any | None:
         for name in names:
