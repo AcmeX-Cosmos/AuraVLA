@@ -2,7 +2,45 @@
 
 AuraVLA 使用已经打开的 Isaac Sim VS Code Edition 实例运行机械臂。启动脚本通过 VS Code executor（`127.0.0.1:8226`）注入运行时，不会启动第二个 Isaac Sim。
 
-## 1. 启动 Isaac 运行时
+## 1. 一键启动完整系统
+
+确认 Isaac Sim VS Code Edition 已打开，并加载包含 DACH TRON2A、相机、桌面、篮子和目标物体的场景。然后执行：
+
+```bash
+cd /home/acmex/Code/learning/courses/AuraVLA
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 launch aura_bringup aura_bringup.launch.py
+```
+
+该 launch 会统一启动：
+
+- AuraVLA ROS 2 感知、规划、执行、验证和编排节点
+- Isaac Sim VS Code runtime 注入
+- `aura_isaac_bridge_node`
+- Foxglove WebSocket bridge
+- 不接管标准输入的 NVIDIA Agent 独立终端
+
+Foxglove Studio 连接 `ws://localhost:8765`。launch 启动完成后，另开一个终端启动交互式 NVIDIA Agent：
+
+```bash
+cd /home/acmex/Code/learning/courses/AuraVLA
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+./aura_scripts/start_nvidia_agent.sh
+```
+
+调试时可关闭指定组件：
+
+```bash
+# 只启动 ROS 节点和 bridge，不重复注入 Isaac
+ros2 launch aura_bringup aura_bringup.launch.py \
+  start_isaac:=false
+
+# Isaac、ROS 和 Foxglove 已经运行时，不重复启动任何组件；直接运行上面的 Agent 脚本
+```
+
+## 2. 手动启动 Isaac 运行时
 
 先确认 Isaac Sim VS Code Edition 已打开，并加载包含 DACH TRON2A、相机、桌面、篮子和目标物体的场景。
 
@@ -19,7 +57,7 @@ Isaac runtime loaded in VS Code Edition
 Isaac task bridge started: /tmp/aura-vla-control
 ```
 
-## 2. 启动 NVIDIA Agent
+## 3. 手动启动 NVIDIA Agent
 
 打开新的终端执行：
 
@@ -36,13 +74,13 @@ Isaac execution: enabled
 Isaac camera: /tmp/aura-vla-camera
 ```
 
-## 3.1 GraspNet 运行要求
+## 4. GraspNet 运行要求
 
 AuraVLA 当前强制使用 GraspNet 生成抓取点。GraspNet baseline、Python 依赖和
 `checkpoint-rs.tar` 必须存在于配置的模型目录中；模型不可用时任务会安全终止，
 不会回退到场景几何抓取。
 
-## 4. 快捷指令
+## 5. 快捷指令
 
 在 NVIDIA Agent 的 `you>` 提示符输入：
 
@@ -58,6 +96,9 @@ AuraVLA 当前强制使用 GraspNet 生成抓取点。GraspNet baseline、Python
 
 ROS 2 实时运输跟踪话题：
 
+使用一键 launch 时，`aura_isaac_bridge_node` 已经自动启动，不要重复运行下面的
+bridge 命令。仅在手动启动流程中执行：
+
 ```bash
 # 新终端：启动 Isaac 状态与运输遥测 ROS 2 bridge
 source /opt/ros/humble/setup.bash
@@ -72,7 +113,35 @@ ros2 topic echo /aura/transport_tracking std_msgs/msg/String
 该话题会先发布 bridge 的 `waiting_for_event` 心跳；任务进入运输阶段后，
 发布 GraspNet 运输校验、物体偏差、重规划请求以及重规划结果。
 
-## 5. Agent 命令
+Foxglove Plot 可直接使用以下标准话题：
+
+```text
+/aura/graspnet/position_error_m
+/aura/graspnet/confidence
+/aura/graspnet/observed_position
+/aura/graspnet/expected_position
+/aura/graspnet/position_error_vector_m
+/aura/graspnet/replan
+/aura/graspnet/state
+```
+
+启动 Foxglove ROS 2 bridge（默认 WebSocket `ws://localhost:8765`）：
+
+```bash
+./aura_scripts/start_foxglove.sh
+```
+
+该入口参考 RCIA-vision 的 `foxglove_bridge_launch.xml` 启动方式，但不调用
+RCIA-vision 的文件或节点。若尚未安装 Foxglove bridge：
+
+```bash
+sudo apt install ros-humble-foxglove-bridge
+```
+
+然后在 Foxglove Studio 连接 `ws://localhost:8765`，打开 **Plot** 面板，
+选择 `position_error_m`、`confidence` 或位置向量字段即可绘图。
+
+## 6. Agent 命令
 
 ```text
 /isaac       恢复当前 Isaac Sim VS Code Edition 运行时
@@ -85,7 +154,7 @@ ros2 topic echo /aura/transport_tracking std_msgs/msg/String
 /quit        退出 NVIDIA Agent
 ```
 
-## 6. 状态检查
+## 7. 状态检查
 
 检查 Task Bridge：
 
@@ -117,7 +186,7 @@ ros2 topic echo /aura/transport_tracking std_msgs/msg/String
 如果话题不存在，确认已通过 `aura_system.launch.py` 启动
 `aura_isaac_bridge_node`，并在 Isaac Sim 中执行 `/reload`。
 
-## 7. 常见问题
+## 8. 常见问题
 
 ### GraspNet 不可用
 

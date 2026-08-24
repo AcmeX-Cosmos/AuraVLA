@@ -6,6 +6,9 @@
   <maintainer email="AcmeX@foxmail.com">AuraVLA Team</maintainer>
   <license>Apache-2.0</license>
 
+  <depend>launch</depend>
+  <depend>launch_ros</depend>
+
   <exec_depend>aura_interfaces</exec_depend>
   <exec_depend>aura_perception</exec_depend>
   <exec_depend>aura_planning</exec_depend>
