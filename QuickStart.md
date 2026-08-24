@@ -56,6 +56,22 @@ AuraVLA 当前强制使用 GraspNet 生成抓取点。GraspNet baseline、Python
 | `6` | `/camera`，刷新并检查 Isaac 相机帧 |
 | `7` | 现在画面中有什么物体 |
 
+ROS 2 实时运输跟踪话题：
+
+```bash
+# 新终端：启动 Isaac 状态与运输遥测 ROS 2 bridge
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 run aura_isaac_bridge isaac_bridge_node --ros-args \
+  -p check_rate:=5.0
+
+# 另一个终端：订阅实时运输跟踪事件
+ros2 topic echo /aura/transport_tracking std_msgs/msg/String
+```
+
+该话题会先发布 bridge 的 `waiting_for_event` 心跳；任务进入运输阶段后，
+发布 GraspNet 运输校验、物体偏差、重规划请求以及重规划结果。
+
 ## 5. Agent 命令
 
 ```text
@@ -90,6 +106,16 @@ ls -lh /tmp/aura-vla-camera/
 ```
 
 目录应持续更新 RGB、深度和元数据文件。
+
+检查 ROS 2 运输跟踪话题：
+
+```bash
+ros2 topic list | rg 'aura/transport_tracking'
+ros2 topic echo /aura/transport_tracking std_msgs/msg/String
+```
+
+如果话题不存在，确认已通过 `aura_system.launch.py` 启动
+`aura_isaac_bridge_node`，并在 Isaac Sim 中执行 `/reload`。
 
 ## 7. 常见问题
 

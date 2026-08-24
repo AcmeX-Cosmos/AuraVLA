@@ -7,6 +7,7 @@ change planner output, or modify any physics state.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import time
 
@@ -16,18 +17,28 @@ from pxr import Gf, UsdGeom
 
 
 def _load_path_visualization_config() -> dict:
-    config_path = Path(__file__).resolve().parents[1] / "config" / "config.yaml"
+    project_root = Path(
+        os.environ.get("AURA_VLA_ROOT", Path(__file__).resolve().parents[3])
+    ).expanduser()
+    config_candidates = (
+        project_root / "aura_bringup" / "config" / "config.yaml",
+        Path(__file__).resolve().parents[1] / "config" / "config.yaml",
+    )
     try:
         import yaml
 
-        settings = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-        return ((settings.get("visualization") or {}).get("path") or {})
+        for config_path in config_candidates:
+            if not config_path.is_file():
+                continue
+            settings = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            return ((settings.get("visualization") or {}).get("path") or {})
     except (ImportError, OSError, TypeError, ValueError):
-        return {}
+        pass
+    return {}
 
 
 _CONFIG = _load_path_visualization_config()
-DEFAULT_ENABLED = bool(_CONFIG.get("enabled", True))
+DEFAULT_ENABLED = bool(_CONFIG.get("enabled", False))
 DEFAULT_ROOT_PATH = str(_CONFIG.get("root_prim_path", "/World/AuraDebug/PlannedPath"))
 DEFAULT_REFRESH_INTERVAL_SEC = max(
     float(_CONFIG.get("refresh_interval_sec", 0.5)),

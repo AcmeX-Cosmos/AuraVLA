@@ -23,7 +23,9 @@ DEFAULT_CAMERA_PRIM_PATH = os.getenv(
     "AURA_CAMERA_PRIM_PATH",
     "/World/DACH_TRON2A/head_pitch_Link/camera",
 )
-DEFAULT_CAMERA_RESOLUTION = (1280, 720)
+# The NVIDIA agent downsamples frames before inference. Keep Isaac rendering
+# at the same working resolution to avoid unnecessary render and PNG cost.
+DEFAULT_CAMERA_RESOLUTION = (640, 360)
 DEFAULT_CAMERA_BRIDGE_DIR = Path(
     os.getenv("AURA_CAMERA_DIR", "/tmp/aura-vla-camera")
 ).expanduser()

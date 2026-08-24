@@ -67,6 +67,22 @@ def generate_launch_description():
         output='screen'
     )
 
+    # File-backed Isaac telemetry bridge.  The Isaac Sim task runtime writes
+    # transport events without importing rclpy; this node republishes them.
+    isaac_bridge_node = Node(
+        package='aura_isaac_bridge',
+        executable='isaac_bridge_node',
+        name='aura_isaac_bridge_node',
+        parameters=[{
+            'status_file': '/tmp/aura-vla-control/status.json',
+            'transport_tracking_file': '/tmp/aura-vla-control/transport_tracking.json',
+            'transport_tracking_topic': 'aura/transport_tracking',
+            'transport_tracking_heartbeat_sec': 5.0,
+            'check_rate': 5.0,
+        }],
+        output='screen',
+    )
+
     return LaunchDescription([
         config_file_arg,
         perception_node,
@@ -74,4 +90,5 @@ def generate_launch_description():
         execution_node,
         verification_node,
         orchestration_node,
+        isaac_bridge_node,
     ])
