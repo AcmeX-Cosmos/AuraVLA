@@ -141,6 +141,9 @@ sudo apt install ros-humble-foxglove-bridge
 然后在 Foxglove Studio 连接 `ws://localhost:8765`，打开 **Plot** 面板，
 选择 `position_error_m`、`confidence` 或位置向量字段即可绘图。
 
+遥测 bridge 每 5 秒发布一次心跳，并重发最近一次有效 GraspNet 样本；Foxglove
+晚于任务启动连接时也能收到数据。新的任务执行后，Plot 会继续接收实时样本。
+
 ## 6. Agent 命令
 
 ```text

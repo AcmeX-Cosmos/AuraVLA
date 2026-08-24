@@ -9,6 +9,12 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PointStamped, Vector3Stamped
 from std_msgs.msg import Bool, Float32, String
+from rclpy.qos import (
+    QoSDurabilityPolicy,
+    QoSHistoryPolicy,
+    QoSProfile,
+    QoSReliabilityPolicy,
+)
 import json
 from pathlib import Path
 import time
@@ -54,40 +60,52 @@ class IsaacBridgeNode(Node):
         self.status_file = Path(status_file)
         self.transport_tracking_file = Path(transport_tracking_file)
         self._last_tracking_signature = None
+        self._last_tracking_payload = None
         self._tracking_file_missing_logged = False
         self._tracking_event_logged = False
         self._tracking_heartbeat_sec = max(float(heartbeat_sec), 0.0)
         self._last_tracking_heartbeat = 0.0
         self.graspnet_frame_id = frame_id
+        self.telemetry_qos = QoSProfile(
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=10,
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            # Keep the publisher compatible with the default `ros2 topic
+            # echo` and Foxglove subscribers. The heartbeat republishes the
+            # latest sample for subscribers that connect after an event.
+            durability=QoSDurabilityPolicy.VOLATILE,
+        )
 
         self.status_pub = self.create_publisher(String, status_topic, 10)
         self.transport_tracking_pub = self.create_publisher(
             String,
             transport_tracking_topic,
-            10,
+            self.telemetry_qos,
         )
         # Scalar/vector topics use standard ROS messages so Foxglove Plot can
         # graph them directly without parsing the JSON event string.
         self.graspnet_state_pub = self.create_publisher(
-            String, f'{topic_prefix}/state', 10
+            String, f'{topic_prefix}/state', self.telemetry_qos
         )
         self.graspnet_error_pub = self.create_publisher(
-            Float32, f'{topic_prefix}/position_error_m', 10
+            Float32, f'{topic_prefix}/position_error_m', self.telemetry_qos
         )
         self.graspnet_confidence_pub = self.create_publisher(
-            Float32, f'{topic_prefix}/confidence', 10
+            Float32, f'{topic_prefix}/confidence', self.telemetry_qos
         )
         self.graspnet_replan_pub = self.create_publisher(
-            Bool, f'{topic_prefix}/replan', 10
+            Bool, f'{topic_prefix}/replan', self.telemetry_qos
         )
         self.graspnet_observed_pub = self.create_publisher(
-            PointStamped, f'{topic_prefix}/observed_position', 10
+            PointStamped, f'{topic_prefix}/observed_position', self.telemetry_qos
         )
         self.graspnet_expected_pub = self.create_publisher(
-            PointStamped, f'{topic_prefix}/expected_position', 10
+            PointStamped, f'{topic_prefix}/expected_position', self.telemetry_qos
         )
         self.graspnet_error_vector_pub = self.create_publisher(
-            Vector3Stamped, f'{topic_prefix}/position_error_vector_m', 10
+            Vector3Stamped,
+            f'{topic_prefix}/position_error_vector_m',
+            self.telemetry_qos,
         )
 
         # Timer
@@ -137,6 +155,7 @@ class IsaacBridgeNode(Node):
         msg.data = json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
         publisher.publish(msg)
         self._publish_graspnet_topics(payload)
+        self._last_tracking_payload = payload
         self._last_tracking_signature = signature
         if not self._tracking_event_logged:
             self.get_logger().info('Transport tracking event published')
@@ -161,10 +180,16 @@ class IsaacBridgeNode(Node):
             'transport_tracking_file': str(self.transport_tracking_file),
         }, ensure_ascii=False, separators=(',', ':'))
         self.transport_tracking_pub.publish(msg)
-        self._publish_graspnet_topics({
+        heartbeat_payload = {
             'state': 'waiting_for_event' if not self.transport_tracking_file.exists() else 'monitoring',
             'replan': False,
-        })
+        }
+        # The file writer emits only on state changes. Republish the latest
+        # valid sample on the heartbeat so Foxglove plots receive a continuous
+        # stream while the robot is stationary between tracking updates.
+        self._publish_graspnet_topics(
+            self._last_tracking_payload or heartbeat_payload
+        )
         self._last_tracking_heartbeat = now
 
     def _publish_graspnet_topics(self, payload):
@@ -237,7 +262,8 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':
