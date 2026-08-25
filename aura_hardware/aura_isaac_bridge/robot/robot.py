@@ -78,7 +78,7 @@ def _load_aura_runtime_config() -> None:
     set_value("AURA_ANYGRASP_FUSION_MAX_POSITION_DISPERSION_M", fusion.get("max_position_dispersion_m", 0.025))
     set_value("AURA_ANYGRASP_FUSION_MAX_ORIENTATION_DISPERSION_DEG", fusion.get("max_orientation_dispersion_deg", 25.0))
     set_value("AURA_ANYGRASP_FUSION_POSITION_OUTLIER_FLOOR_M", fusion.get("position_outlier_floor_m", 0.012))
-    set_value("AURA_ANYGRASP_FUSION_MIN_CONFIDENCE", fusion.get("min_confidence", 0.10))
+    set_value("AURA_ANYGRASP_FUSION_MIN_CONFIDENCE", fusion.get("min_confidence", 0.03))
     set_value("AURA_BASKET_RESET_POSITION_JSON", json.dumps(basket.get("reset_position")))
     set_value("AURA_BASKET_RESET_ORIENTATION_JSON", json.dumps(basket.get("reset_orientation")))
 

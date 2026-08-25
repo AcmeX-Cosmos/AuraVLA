@@ -169,7 +169,7 @@ class IsaacRuntimeLauncher:
             "import os\n"
             "import sys\n"
             "import importlib\n"
-            "for _module_name in sorted([_name for _name in list(sys.modules) if _name == 'aura_isaac_bridge' or _name.startswith('aura_isaac_bridge.')], key=lambda _name: _name.count('.'), reverse=True):\n"
+            "for _module_name in sorted([_name for _name in list(sys.modules) if _name == 'aura_isaac_bridge' or _name.startswith('aura_isaac_bridge.') or _name == 'pointnet2' or _name.startswith('pointnet2.') or _name == 'gsnet' or _name.startswith('gsnet.')], key=lambda _name: _name.count('.'), reverse=True):\n"
             "    _module = sys.modules.pop(_module_name, None)\n"
             "    if _module is not None and '.' in _module_name:\n"
             "        _parent = sys.modules.get(_module_name.rsplit('.', 1)[0])\n"

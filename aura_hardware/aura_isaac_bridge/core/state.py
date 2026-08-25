@@ -172,7 +172,7 @@ ANYGRASP_FUSION_POSITION_OUTLIER_FLOOR_M = max(
     0.001,
 )
 ANYGRASP_FUSION_MIN_CONFIDENCE = float(
-    np.clip(float(os.environ.get("AURA_ANYGRASP_FUSION_MIN_CONFIDENCE", "0.10")), 0.0, 1.0)
+    np.clip(float(os.environ.get("AURA_ANYGRASP_FUSION_MIN_CONFIDENCE", "0.03")), 0.0, 1.0)
 )
 
 # Desktop pick-and-place should remain predominantly top-down. The launcher

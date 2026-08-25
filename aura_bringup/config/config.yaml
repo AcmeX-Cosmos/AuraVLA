@@ -73,7 +73,10 @@ perception:
     max_position_dispersion_m: 0.025
     max_orientation_dispersion_deg: 25.0
     position_outlier_floor_m: 0.012
-    min_confidence: 0.10
+    # AnyGrasp's raw grasp score is a ranking score, not a calibrated
+    # probability. Temporal fusion still enforces depth, geometry, and
+    # dispersion gates before accepting a grasp.
+    min_confidence: 0.03
 
 execution:
   enabled: true

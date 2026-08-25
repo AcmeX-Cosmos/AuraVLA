@@ -595,16 +595,16 @@ def ensure_anygrasp_python_dependencies():
             f"未找到 AnyGrasp SDK: {grasp_detection_dir}。"
             "请将官方 AnyGrasp SDK 放入项目 AnyGrasp/sdk，或设置 ANYGRASP_DIR。"
         )
-    sdk_paths = (
+    private_python_dir = anygrasp_root / "dependencies" / "python"
+    sdk_paths = list(private_python_dir.glob("pointnet2-*.egg")) + [
         ANYGRASP_DIR,
         grasp_detection_dir,
         grasp_detection_dir / "gsnet_versions",
-        ANYGRASP_DIR / "pointnet2",
-        anygrasp_root / "dependencies" / "python",
-    )
-    private_python_dir = anygrasp_root / "dependencies" / "python"
-    sdk_paths += tuple(private_python_dir.glob("pointnet2-*.egg"))
-    for sdk_path in sdk_paths:
+    ]
+    # Put the private compiled egg first. The SDK source tree is retained
+    # below it for pure-Python helpers, but its `pointnet2/` package directory
+    # must never itself be added as a sys.path root.
+    for sdk_path in reversed(sdk_paths):
         path = str(sdk_path)
         if sdk_path.is_dir() and path not in sys.path:
             sys.path.insert(0, path)
@@ -639,8 +639,15 @@ def ensure_anygrasp_python_dependencies():
 
     importlib.invalidate_caches()
     try:
+        # A long-lived Isaac/VS Code process may retain a stale pointnet2
+        # package from another workspace. Remove it before resolving Aura's
+        # private egg and source tree.
+        for module_name in tuple(sys.modules):
+            if module_name == "pointnet2" or module_name.startswith("pointnet2."):
+                sys.modules.pop(module_name, None)
         importlib.import_module("MinkowskiEngine")
         importlib.import_module("pointnet2._ext")
+        importlib.import_module("pointnet2.pointnet2_utils")
         importlib.import_module("gsnet")
     except Exception as exc:
         raise RuntimeError(

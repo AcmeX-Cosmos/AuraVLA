@@ -116,22 +116,36 @@ def _max_path_downward_tilt(joint_targets):
     return max_tilt
 
 
-def get_object_gripper_containment(prim_path, *, target_prim=None):
-    """校验物体几何中心是否位于两片夹指的共同工作空间。
+def get_object_gripper_containment(
+    prim_path,
+    *,
+    target_prim=None,
+    reference_center=None,
+):
+    """校验物体抓取参考点是否位于两片夹指的共同工作空间。
 
     Do not use the arithmetic mean of mesh vertices here.  The MasterChef
     can's cap and label contain a denser vertex distribution on one side, so
     that mean is 24 mm away from the visible/collision volume center even
     though the can is correctly between the fingers.  Planning already uses
     the world bounding-box center; using the same geometric reference keeps
-    the strict containment check aligned with the grasp target.
+    the strict containment check aligned with the grasp target. Curved
+    objects such as the banana may use a calibrated physical pinch point
+    instead of their whole-object bbox center.
     """
-    if target_prim is None:
-        object_center, _, _ = get_bbox_center(get_current_stage(), prim_path)
+    if reference_center is None:
+        if target_prim is None:
+            object_center, _, _ = get_bbox_center(get_current_stage(), prim_path)
+        else:
+            object_center, _, _ = get_current_bbox_center(
+                get_current_stage(), target_prim, prim_path
+            )
+        object_center_source = "world_bbox_center"
     else:
-        object_center, _, _ = get_current_bbox_center(
-            get_current_stage(), target_prim, prim_path
-        )
+        object_center = np.asarray(reference_center, dtype=float).reshape(3).copy()
+        if not np.all(np.isfinite(object_center)):
+            raise RuntimeError("抓取参考点包含非有限坐标")
+        object_center_source = "calibrated_grasp_reference"
     left_corners = get_finger_collision_world_corners(state.left_finger, "left")
     right_corners = get_finger_collision_world_corners(state.right_finger, "right")
     left_center = np.mean(left_corners, axis=0)
@@ -196,7 +210,7 @@ def get_object_gripper_containment(prim_path, *, target_prim=None):
             and lateral_inside
         ),
         "object_center": object_center.tolist(),
-        "object_center_source": "world_bbox_center",
+        "object_center_source": object_center_source,
         "gripper_center": gripper_center.tolist(),
         "finger_separation_m": finger_separation,
         "axial_error_m": axial_error,

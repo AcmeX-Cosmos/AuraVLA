@@ -824,7 +824,16 @@ def _evaluate_complete_task_pose_chain(
             goal_candidates.append(candidate_goal)
 
     attempts = []
-    yaw_offsets = [0, 15, -15, 30, -30, 45, -45, 60, -60, 90, -90]
+    canonical_object_name = state.SCENE_NAME_RESOLVER.canonicalize(object_name)
+    if canonical_object_name == "banana":
+        # A banana is held by a narrow, curved contact region. Rotating the
+        # wrist after closing changes the finger collision envelope and can
+        # lever the object out of the grasp. Keep the AnyGrasp-selected
+        # tabletop orientation throughout transport; the placement planner
+        # still searches basket candidates and collision-free routes.
+        yaw_offsets = [0]
+    else:
+        yaw_offsets = [0, 15, -15, 30, -30, 45, -45, 60, -60, 90, -90]
     for yaw_offset_deg in yaw_offsets:
         transport_orientation = rotate_grasp_about_approach_axis(
             orientation, math.radians(yaw_offset_deg)
@@ -1160,6 +1169,19 @@ def execute_pick_place(object_name, target_name):
                     "📐 香蕉 AnyGrasp 抓取点已校正到局部实体截面中心: "
                     f"correction={section_correction}, "
                     f"target={physical_alignment_center[:2]}"
+                )
+                # The local mesh correction is the physical pinch target. Keep
+                # it as the single source for reachability, TCP inversion,
+                # hover planning, and the final containment gate. Previously
+                # only the diagnostic center was corrected while
+                # ``object_position`` still drove the robot to the raw
+                # AnyGrasp point.
+                physical_alignment_center[2] = grasp_target_center[2]
+                grasp_target_center = physical_alignment_center.copy()
+                object_position = grasp_target_center.copy()
+                print(
+                    "🎯 香蕉最终规划中心同步为实体截面中心: "
+                    f"position={object_position}"
                 )
             else:
                 containment_xy_error = (
@@ -2329,7 +2351,9 @@ def execute_pick_place(object_name, target_name):
             "finger_colliders": collision_diagnostics,
         }
     grasp_containment = get_object_gripper_containment(
-        object_prim_path, target_prim=target_prim
+        object_prim_path,
+        target_prim=target_prim,
+        reference_center=physical_alignment_center,
     )
     print(
         "🧪 闭合后双指空间包含校验: "
@@ -2493,7 +2517,9 @@ def execute_pick_place(object_name, target_name):
         )
         transport_orientation = desired_transport_orientation
         post_rotation_containment = get_object_gripper_containment(
-            object_prim_path, target_prim=target_prim
+            object_prim_path,
+            target_prim=target_prim,
+            reference_center=physical_alignment_center,
         )
         if not post_rotation_containment["contained"]:
             return {

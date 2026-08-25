@@ -102,13 +102,16 @@ def fuse_grasp_observations(
     max_position_dispersion_m: float = 0.025,
     max_orientation_dispersion_deg: float = 25.0,
     position_outlier_floor_m: float = 0.012,
-    min_confidence: float = 0.10,
+    min_confidence: float = 0.03,
 ) -> dict:
     """Fuse stable AnyGrasp observations and reject temporal outliers.
 
     Position outliers are rejected using a coordinate-wise median/MAD gate.
     The remaining observations are weighted by model score, valid depth, and
-    geometric validity. Quaternion signs are aligned before the Markley mean.
+    geometric validity. AnyGrasp's score is a ranking score rather than a
+    calibrated probability, so the threshold is intentionally calibrated to
+    the observed SDK score range. Quaternion signs are aligned before the
+    Markley mean.
     """
     values = _normalise_observations(observations)
     if not values:
