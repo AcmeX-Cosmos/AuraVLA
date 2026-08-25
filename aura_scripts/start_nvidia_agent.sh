@@ -7,6 +7,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIG_FILE="$PROJECT_ROOT/aura_bringup/config/config.yaml"
+export AURA_VLA_ROOT="$PROJECT_ROOT"
 
 echo "============================================================"
 echo "AuraVLA - NVIDIA Agent Interactive Mode"

@@ -47,7 +47,7 @@ from aura_isaac_bridge.core.state import (
     CARRY_MAX_JOINT_STEP, CARRY_MIN_FRAMES,
     CARRY_REPLAN_CHECK_WAYPOINTS, CARRY_REPLAN_POSITION_TOLERANCE_M,
     CARRY_REPLAN_MAX_ATTEMPTS, CARRY_REPLAN_FRAME_COUNT,
-    SHOW_GRASP_DEBUG, USE_GRASPNET, USE_GRASPNET_ORIENTATION,
+    SHOW_GRASP_DEBUG, USE_ANYGRASP, USE_ANYGRASP_ORIENTATION,
     GRASP_POSITION_OFFSET, GRASP_INSERT_DEPTH,
     MIN_GRIPPER_TABLE_CLEARANCE, TABLE_CLEARANCE_ABORT_MARGIN,
     BASKET_RESET_POSITION, BASKET_RESET_ORIENTATION,
@@ -68,7 +68,7 @@ from aura_isaac_bridge.core.perception import (
     get_mesh_horizontal_principal_axes,
     show_red_grasp_point,
     release_cuda_inference_cache,
-    infer_graspnet_fused_world_pose,
+    infer_anygrasp_fused_world_pose,
 )
 from aura_isaac_bridge.core.motion import (
     clear_legacy_grasp_joints,
@@ -495,7 +495,7 @@ def adjust_object_grasp_position(
                 direction_to_base / direction_norm * BANANA_NEAR_SIDE_OFFSET
             )
     print(
-        f"🎯 {canonical_name} GraspNet/场景抓取点: "
+        f"🎯 {canonical_name} AnyGrasp/场景抓取点: "
         f"mesh_center_xy={mesh_center[:2]}, "
         f"bbox_center_xy={bbox_center[:2]}, "
         f"source_xy={source_xy}, "
@@ -1009,79 +1009,79 @@ def execute_pick_place(object_name, target_name):
 
     top_down_orientation = get_top_down_grasp_orientation(object_name, target_prim)
     gripper_close_target = get_gripper_close_target(object_name)
-    perception_source = "graspnet_required"
-    graspnet_position_active = False
-    graspnet_fusion = None
+    perception_source = "anygrasp_required"
+    anygrasp_position_active = False
+    anygrasp_fusion = None
     perception_started = time.perf_counter()
-    if not USE_GRASPNET:
+    if not USE_ANYGRASP:
         return {
             "success": False,
-            "message": "GraspNet perception is mandatory but disabled",
-            "error_code": "GRASPNET_REQUIRED",
+            "message": "AnyGrasp perception is mandatory but disabled",
+            "error_code": "ANYGRASP_REQUIRED",
             "object_name": str(object_name),
             "target_name": str(target_name),
             "perception_source": perception_source,
         }
     try:
-        graspnet_fusion = infer_graspnet_fused_world_pose(
+        anygrasp_fusion = infer_anygrasp_fused_world_pose(
             get_current_stage(),
             state.grasp_camera,
             target_prim,
         )
     except Exception as exc:
         release_cuda_inference_cache()
-        print("❌ GraspNet 视觉抓取不可用，强制任务终止")
+        print("❌ AnyGrasp 视觉抓取不可用，强制任务终止")
         return {
             "success": False,
-            "message": "GraspNet perception is required but unavailable",
-            "error_code": "GRASPNET_UNAVAILABLE",
+            "message": "AnyGrasp perception is required but unavailable",
+            "error_code": "ANYGRASP_UNAVAILABLE",
             "object_name": str(object_name),
             "target_name": str(target_name),
             "perception_source": perception_source,
             "details": {
-                "stage": "graspnet_temporal_fusion",
+                "stage": "anygrasp_temporal_fusion",
                 "error": str(exc),
             },
         }
     else:
-        perception_source = str(graspnet_fusion.get("source", "graspnet_temporal_fusion"))
-        # GraspNet's calibrated position is now the sole grasp-center source.
+        perception_source = str(anygrasp_fusion.get("source", "anygrasp_temporal_fusion"))
+        # AnyGrasp's calibrated position is now the sole grasp-center source.
         # Keep the top-down/PCA orientation because its physical jaw-axis
         # constraint is independent of the detector's camera-frame wrist roll.
-        object_position = np.asarray(graspnet_fusion["position"], dtype=float).copy()
+        object_position = np.asarray(anygrasp_fusion["position"], dtype=float).copy()
         grasp_orientation = top_down_orientation
-        graspnet_position_active = True
-        grasp_strategy = "graspnet_temporal_fusion_position_top_down"
+        anygrasp_position_active = True
+        grasp_strategy = "anygrasp_temporal_fusion_position_top_down"
         publish_transport_tracking({
-            "event": "graspnet_perception",
+            "event": "anygrasp_perception",
             "state": "grasp_pose_fused",
             "object_name": str(object_name),
             "target_name": str(target_name),
             "observed_position": object_position.tolist(),
-            "orientation": graspnet_fusion.get("orientation"),
-            "fusion": graspnet_fusion,
+            "orientation": anygrasp_fusion.get("orientation"),
+            "fusion": anygrasp_fusion,
             "replan": False,
         })
         print(
-            "🎯 使用 GraspNet 多帧融合 + 相机标定抓取点: "
+            "🎯 使用 AnyGrasp 多帧融合 + 相机标定抓取点: "
             f"position={object_position}, "
-            f"confidence={graspnet_fusion['confidence']:.3f}"
+            f"confidence={anygrasp_fusion['confidence']:.3f}"
         )
     print(
-        f"⏱️ SAM + GraspNet: "
+        f"⏱️ SAM + AnyGrasp: "
         f"{time.perf_counter() - perception_started:.2f} s"
     )
 
     bbox_center, bbox_min, bbox_max = get_current_bbox_center(
         get_current_stage(), target_prim, object_prim_path
     )
-    if not graspnet_position_active and canonical_object_name != "banana":
+    if not anygrasp_position_active and canonical_object_name != "banana":
         object_position = np.asarray(bbox_center, dtype=float).copy()
         print(
             "🎯 非香蕉物体使用 USD 几何包围盒中心: "
             f"center={object_position}"
         )
-    if not graspnet_position_active:
+    if not anygrasp_position_active:
         minimum_grasp_height = bbox_min[2] + (
             bbox_max[2] - bbox_min[2]
         ) * GRASP_MIN_HEIGHT_FRACTION
@@ -1114,17 +1114,17 @@ def execute_pick_place(object_name, target_name):
             )
         object_position[2] += DACH_GRASP_HEIGHT_OFFSET
     grasp_target_center = np.asarray(object_position, dtype=float).copy()
-    # GraspNet + the one global camera-frame offset remains the grasp source.
+    # AnyGrasp + the one global camera-frame offset remains the grasp source.
     # Its selected pinch point can still carry a small object-specific lateral
     # residual.  Use the live collision geometry only as a bounded final
     # containment guard, so closing never begins with the object beside a jaw.
     physical_alignment_center = grasp_target_center.copy()
-    if graspnet_position_active:
+    if anygrasp_position_active:
         bbox_center_array = np.asarray(bbox_center, dtype=float)
         bbox_min_array = np.asarray(bbox_min, dtype=float)
         bbox_max_array = np.asarray(bbox_max, dtype=float)
         geometry_margin = 0.01
-        graspnet_xy_in_bounds = bool(
+        anygrasp_xy_in_bounds = bool(
             np.all(
                 physical_alignment_center[:2]
                 >= bbox_min_array[:2] - geometry_margin
@@ -1134,16 +1134,16 @@ def execute_pick_place(object_name, target_name):
                 <= bbox_max_array[:2] + geometry_margin
             )
         )
-        graspnet_vertical_margin = max(
+        anygrasp_vertical_margin = max(
             0.01,
             0.15 * float(bbox_max_array[2] - bbox_min_array[2]),
         )
-        graspnet_z_in_bounds = (
-            bbox_min_array[2] - graspnet_vertical_margin
+        anygrasp_z_in_bounds = (
+            bbox_min_array[2] - anygrasp_vertical_margin
             <= physical_alignment_center[2]
-            <= bbox_max_array[2] + graspnet_vertical_margin
+            <= bbox_max_array[2] + anygrasp_vertical_margin
         )
-        if graspnet_xy_in_bounds and graspnet_z_in_bounds:
+        if anygrasp_xy_in_bounds and anygrasp_z_in_bounds:
             if canonical_object_name == "banana":
                 section_center = get_current_mesh_horizontal_cross_section_center(
                     get_current_stage(),
@@ -1157,7 +1157,7 @@ def execute_pick_place(object_name, target_name):
                 )
                 physical_alignment_center[:2] = section_center
                 print(
-                    "📐 香蕉 GraspNet 抓取点已校正到局部实体截面中心: "
+                    "📐 香蕉 AnyGrasp 抓取点已校正到局部实体截面中心: "
                     f"correction={section_correction}, "
                     f"target={physical_alignment_center[:2]}"
                 )
@@ -1169,34 +1169,34 @@ def execute_pick_place(object_name, target_name):
                     np.linalg.norm(containment_xy_error)
                 )
             if canonical_object_name in {"master_chef_can", "tomato_soup_can"}:
-                # The temporally weighted GraspNet point is the actual TCP
+                # The temporally weighted AnyGrasp point is the actual TCP
                 # source. Geometry is only a bounded validation gate here;
                 # replacing it with the USD bbox center would discard the
                 # calibrated visual estimate before IK and transport.
                 grasp_strategy += "+geometry_validated"
                 print(
-                    "📐 罐头 GraspNet 加权抓取点通过几何校验: "
+                    "📐 罐头 AnyGrasp 加权抓取点通过几何校验: "
                     f"xy_error={containment_xy_error_norm:.4f} m"
                 )
             if canonical_object_name != "banana":
                 print(
-                    "📐 GraspNet 抓取点物理包含校正: "
+                    "📐 AnyGrasp 抓取点物理包含校正: "
                     f"xy_error={containment_xy_error}, "
                     f"norm={containment_xy_error_norm:.4f} m"
                 )
         else:
             print(
-                "⛔ GraspNet 点未通过目标几何一致性检查: "
-                f"xy_in_bounds={graspnet_xy_in_bounds}, "
-                f"z_in_bounds={graspnet_z_in_bounds}"
+                "⛔ AnyGrasp 点未通过目标几何一致性检查: "
+                f"xy_in_bounds={anygrasp_xy_in_bounds}, "
+                f"z_in_bounds={anygrasp_z_in_bounds}"
             )
             return {
                 "success": False,
-                "message": "GraspNet point is outside the target geometry",
-                "error_code": "GRASPNET_GEOMETRY_MISMATCH",
+                "message": "AnyGrasp point is outside the target geometry",
+                "error_code": "ANYGRASP_GEOMETRY_MISMATCH",
                 "object_name": str(object_name),
                 "target_name": str(target_name),
-                "graspnet_position": object_position.tolist(),
+                "anygrasp_position": object_position.tolist(),
                 "bbox_min": bbox_min_array.tolist(),
                 "bbox_max": bbox_max_array.tolist(),
                 "perception_source": perception_source,
@@ -1389,7 +1389,7 @@ def execute_pick_place(object_name, target_name):
                     "planned_short_axis_alignment": planned_alignment,
                     "reachability_precheck": reachability,
                     "banana_pose_attempts": banana_pose_attempts,
-                    "graspnet_fusion": graspnet_fusion,
+                    "anygrasp_fusion": anygrasp_fusion,
                 }
     if final_pose_reachability["selected"] is None and canonical_object_name != "banana":
         for inward_tilt_deg in (
@@ -1484,7 +1484,7 @@ def execute_pick_place(object_name, target_name):
             "message": "no arm can reach the complete grasp and lift pose",
             "reachability_precheck": reachability,
             "strict_pose_attempts": final_pose_reachability.get("attempts", []),
-            "graspnet_fusion": graspnet_fusion,
+            "anygrasp_fusion": anygrasp_fusion,
         }
     print(
         f"🎯 DACH 抓取中心上移 {DACH_GRASP_HEIGHT_OFFSET:.3f} m: "
@@ -1502,9 +1502,9 @@ def execute_pick_place(object_name, target_name):
     print(f"📍 语义目标 {target_name} -> 放置位置: {goal_position}")
 
     print(f"🚀 执行 Pick & Place: {object_name} -> {target_name}")
-    # grasp_orientation 已由 GraspNet（6DoF）或 top-down fallback 确定。
+    # grasp_orientation 已由 AnyGrasp（6DoF）或 top-down fallback 确定。
     # 不要在这里重新调用 get_top_down_grasp_orientation()，
-    # 否则 GraspNet 推理出的侧向/斜向位姿会被丢弃，
+    # 否则 AnyGrasp 推理出的侧向/斜向位姿会被丢弃，
     # 导致 hover 始终沿竖直 [0,0,-1] 方向接近，在 arm 工作空间边界处 IK 失败。
     hover_reference_orientation = grasp_orientation
     hover_orientation = hover_reference_orientation
@@ -1568,7 +1568,7 @@ def execute_pick_place(object_name, target_name):
             "reachability_precheck": reachability,
         }
 
-    if graspnet_position_active:
+    if anygrasp_position_active:
         object_position = grasp_target_center.copy()
     else:
         live_bbox_center, live_bbox_min, live_bbox_max = get_current_bbox_center(
@@ -1729,7 +1729,7 @@ def execute_pick_place(object_name, target_name):
             "message": "failed to align physical fingers with object short axis",
             "physical_closing_alignment": physical_alignment,
             "approach": orientation_result,
-            "graspnet_fusion": graspnet_fusion,
+            "anygrasp_fusion": anygrasp_fusion,
         }
     _, aligned_rotation = state.controller.get_end_effector_pose()
     grasp_motion_orientation = rot_matrix_to_quat(aligned_rotation)
@@ -1810,7 +1810,7 @@ def execute_pick_place(object_name, target_name):
     if canonical_object_name == "banana":
         print(
             "📐 香蕉预抓取不再执行开闭探测；"
-            "夹指中点直接对准校正后的 GraspNet 抓取点"
+            "夹指中点直接对准校正后的 AnyGrasp 抓取点"
         )
     verify_gripper_center_local_offset()
     grasp_position = get_tcp_target_for_gripper_center(
@@ -1966,7 +1966,7 @@ def execute_pick_place(object_name, target_name):
             physical_alignment_center[2] += required_lift
             grasp_center_z_offset += required_lift
             # Keep the closed-loop target at the same safety-adjusted height.
-            # Its XY remains the calibrated GraspNet point; without this the
+            # Its XY remains the calibrated AnyGrasp point; without this the
             # later center refinement could undo the table-clearance guard.
             grasp_target_center[2] += required_lift
             print(f"🎯 调整后抓取中心 z={object_position[2]:.4f}, tcp_z={grasp_position[2]:.4f}")
@@ -2010,9 +2010,9 @@ def execute_pick_place(object_name, target_name):
     refinement_steps = GRASP_REFINEMENT_STEPS
     for refinement in range(refinement_steps):
         live_finger_center = get_gripper_collision_center()
-        if graspnet_position_active:
+        if anygrasp_position_active:
             desired_finger_center = physical_alignment_center.copy()
-            # Keep GraspNet's table-safe height. This final loop corrects the
+            # Keep AnyGrasp's table-safe height. This final loop corrects the
             # lateral containment residual only.
             desired_finger_center[2] = live_finger_center[2]
         else:
@@ -2215,10 +2215,7 @@ def execute_pick_place(object_name, target_name):
         if canonical_object_name == "banana"
         else safe_preclose_clearance + 0.0005
     )
-    if (
-        canonical_object_name != "banana"
-        and preclose_table_clearance < safe_preclose_clearance
-    ):
+    if preclose_table_clearance < preclose_target_clearance:
         clearance_correction = (
             preclose_target_clearance - preclose_table_clearance
         )
@@ -2236,20 +2233,20 @@ def execute_pick_place(object_name, target_name):
             corrected_preclose_position,
             segments=1,
             max_steps_per_segment=40,
-            tolerance=0.004,
+            tolerance=0.001,
             orientation=grasp_motion_orientation,
             gripper_positions=gripper_open_target,
-            monitor_table_clearance=True,
+            # The measured pose is already below the conservative abort
+            # threshold. This correction is strictly vertical and moves away
+            # from the table, so checking the pre-correction violation inside
+            # the trajectory would abort before the recovery can run.
+            monitor_table_clearance=False,
             max_joint_step_rad=GRASP_APPROACH_MAX_JOINT_STEP,
             minimum_frames=GRASP_APPROACH_MIN_FRAMES,
         )
         grasp_position = get_rmp_ee_position().copy()
         preclose_table_clearance = float(get_gripper_table_clearance())
-        if (
-            not correction_reached
-            or preclose_table_clearance
-            < safe_preclose_clearance
-        ):
+        if preclose_table_clearance < safe_preclose_clearance:
             move_robot_home(frames=90)
             return {
                 "success": False,
@@ -2325,7 +2322,7 @@ def execute_pick_place(object_name, target_name):
             "object_displacement_m": close_displacement,
             "object_position_before_close": object_position_before_close.tolist(),
             "object_position_after_close": object_position_after_close.tolist(),
-            "graspnet_target_position": grasp_target_center.tolist(),
+            "anygrasp_target_position": grasp_target_center.tolist(),
             "physical_alignment_center": physical_alignment_center.tolist(),
             "preclose_table_clearance_m": preclose_table_clearance,
             "gripper_table_clearance_m": get_gripper_table_clearance(),
@@ -2759,7 +2756,7 @@ def execute_pick_place(object_name, target_name):
                 - carry_reference_gripper_center
             )
             try:
-                live_fusion = infer_graspnet_fused_world_pose(
+                live_fusion = infer_anygrasp_fused_world_pose(
                     get_current_stage(),
                     state.grasp_camera,
                     target_prim,
@@ -2774,7 +2771,7 @@ def execute_pick_place(object_name, target_name):
                 )
                 tracking_error = float(np.linalg.norm(tracking_error_vector))
                 tracking_event = {
-                    "event": "graspnet_transport_tracking",
+                    "event": "anygrasp_transport_tracking",
                     "state": "observation",
                     "object_name": str(object_name),
                     "target_name": str(target_name),
@@ -2790,7 +2787,7 @@ def execute_pick_place(object_name, target_name):
                 publish_transport_tracking(tracking_event)
             except Exception as exc:
                 tracking_event = {
-                    "event": "graspnet_transport_tracking",
+                    "event": "anygrasp_transport_tracking",
                     "state": "observation_unavailable",
                     "object_name": str(object_name),
                     "target_name": str(target_name),
@@ -2887,7 +2884,7 @@ def execute_pick_place(object_name, target_name):
                 replanned_place_hover,
                 replanned_place_gripper,
             ]
-            carry_path_strategy = "rrt_keypose+graspnet_live_replan"
+            carry_path_strategy = "rrt_keypose+anygrasp_live_replan"
             tracking_event["state"] = "replan_succeeded"
             tracking_event["replanned_waypoint_count"] = len(carry_joint_targets)
             publish_transport_tracking(tracking_event)
@@ -2991,7 +2988,7 @@ def execute_pick_place(object_name, target_name):
             "carry_payload_containment": carry_payload_containment,
             "carry_replan_count": carry_replan_count,
             "carry_replan_events": carry_replan_events,
-            "graspnet_fusion": graspnet_fusion,
+            "anygrasp_fusion": anygrasp_fusion,
         }
     if placing_in_basket and not set_planning_basket_obstacle_enabled(False):
         return {
@@ -3295,7 +3292,7 @@ def execute_pick_place(object_name, target_name):
         "place_position": goal_position.tolist(),
         "task_duration_sec": round(time.perf_counter() - task_started, 3),
         "perception_source": perception_source,
-        "graspnet_fusion": graspnet_fusion,
+        "anygrasp_fusion": anygrasp_fusion,
     }
     return result
 

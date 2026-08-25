@@ -44,8 +44,8 @@ class IsaacBridgeNode(Node):
             'aura/transport_tracking',
         )
         self.declare_parameter('transport_tracking_heartbeat_sec', 5.0)
-        self.declare_parameter('graspnet_topic_prefix', 'aura/graspnet')
-        self.declare_parameter('graspnet_frame_id', 'world')
+        self.declare_parameter('anygrasp_topic_prefix', 'aura/anygrasp')
+        self.declare_parameter('anygrasp_frame_id', 'world')
         self.declare_parameter('check_rate', 1.0)
 
         status_file = self.get_parameter('status_file').value
@@ -53,8 +53,8 @@ class IsaacBridgeNode(Node):
         transport_tracking_file = self.get_parameter('transport_tracking_file').value
         transport_tracking_topic = self.get_parameter('transport_tracking_topic').value
         heartbeat_sec = self.get_parameter('transport_tracking_heartbeat_sec').value
-        topic_prefix = str(self.get_parameter('graspnet_topic_prefix').value).rstrip('/')
-        frame_id = str(self.get_parameter('graspnet_frame_id').value)
+        topic_prefix = str(self.get_parameter('anygrasp_topic_prefix').value).rstrip('/')
+        frame_id = str(self.get_parameter('anygrasp_frame_id').value)
         rate = self.get_parameter('check_rate').value
 
         self.status_file = Path(status_file)
@@ -65,7 +65,7 @@ class IsaacBridgeNode(Node):
         self._tracking_event_logged = False
         self._tracking_heartbeat_sec = max(float(heartbeat_sec), 0.0)
         self._last_tracking_heartbeat = 0.0
-        self.graspnet_frame_id = frame_id
+        self.anygrasp_frame_id = frame_id
         self.telemetry_qos = QoSProfile(
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=10,
@@ -84,25 +84,25 @@ class IsaacBridgeNode(Node):
         )
         # Scalar/vector topics use standard ROS messages so Foxglove Plot can
         # graph them directly without parsing the JSON event string.
-        self.graspnet_state_pub = self.create_publisher(
+        self.anygrasp_state_pub = self.create_publisher(
             String, f'{topic_prefix}/state', self.telemetry_qos
         )
-        self.graspnet_error_pub = self.create_publisher(
+        self.anygrasp_error_pub = self.create_publisher(
             Float32, f'{topic_prefix}/position_error_m', self.telemetry_qos
         )
-        self.graspnet_confidence_pub = self.create_publisher(
+        self.anygrasp_confidence_pub = self.create_publisher(
             Float32, f'{topic_prefix}/confidence', self.telemetry_qos
         )
-        self.graspnet_replan_pub = self.create_publisher(
+        self.anygrasp_replan_pub = self.create_publisher(
             Bool, f'{topic_prefix}/replan', self.telemetry_qos
         )
-        self.graspnet_observed_pub = self.create_publisher(
+        self.anygrasp_observed_pub = self.create_publisher(
             PointStamped, f'{topic_prefix}/observed_position', self.telemetry_qos
         )
-        self.graspnet_expected_pub = self.create_publisher(
+        self.anygrasp_expected_pub = self.create_publisher(
             PointStamped, f'{topic_prefix}/expected_position', self.telemetry_qos
         )
-        self.graspnet_error_vector_pub = self.create_publisher(
+        self.anygrasp_error_vector_pub = self.create_publisher(
             Vector3Stamped,
             f'{topic_prefix}/position_error_vector_m',
             self.telemetry_qos,
@@ -154,7 +154,7 @@ class IsaacBridgeNode(Node):
         msg = String()
         msg.data = json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
         publisher.publish(msg)
-        self._publish_graspnet_topics(payload)
+        self._publish_anygrasp_topics(payload)
         self._last_tracking_payload = payload
         self._last_tracking_signature = signature
         if not self._tracking_event_logged:
@@ -187,37 +187,37 @@ class IsaacBridgeNode(Node):
         # The file writer emits only on state changes. Republish the latest
         # valid sample on the heartbeat so Foxglove plots receive a continuous
         # stream while the robot is stationary between tracking updates.
-        self._publish_graspnet_topics(
+        self._publish_anygrasp_topics(
             self._last_tracking_payload or heartbeat_payload
         )
         self._last_tracking_heartbeat = now
 
-    def _publish_graspnet_topics(self, payload):
+    def _publish_anygrasp_topics(self, payload):
         """Fan out one JSON event into Foxglove-friendly standard messages."""
         state_msg = String()
         state_msg.data = str(payload.get('state', payload.get('event', 'unknown')))
-        self.graspnet_state_pub.publish(state_msg)
+        self.anygrasp_state_pub.publish(state_msg)
 
         replan_msg = Bool()
         replan_msg.data = bool(payload.get('replan', False))
-        self.graspnet_replan_pub.publish(replan_msg)
+        self.anygrasp_replan_pub.publish(replan_msg)
 
         fusion = payload.get('fusion') or {}
         confidence = fusion.get('confidence', payload.get('confidence'))
         if confidence is not None:
             confidence_msg = Float32()
             confidence_msg.data = float(confidence)
-            self.graspnet_confidence_pub.publish(confidence_msg)
+            self.anygrasp_confidence_pub.publish(confidence_msg)
 
         observed = self._finite_xyz(payload.get('observed_position'))
         expected = self._finite_xyz(payload.get('expected_position'))
         stamp = self.get_clock().now().to_msg()
         if observed is not None:
-            self.graspnet_observed_pub.publish(
+            self.anygrasp_observed_pub.publish(
                 self._point_message(observed, stamp)
             )
         if expected is not None:
-            self.graspnet_expected_pub.publish(
+            self.anygrasp_expected_pub.publish(
                 self._point_message(expected, stamp)
             )
 
@@ -225,15 +225,15 @@ class IsaacBridgeNode(Node):
         if error is not None:
             error_msg = Float32()
             error_msg.data = float(error)
-            self.graspnet_error_pub.publish(error_msg)
+            self.anygrasp_error_pub.publish(error_msg)
         if observed is not None and expected is not None:
             vector_msg = Vector3Stamped()
             vector_msg.header.stamp = stamp
-            vector_msg.header.frame_id = self.graspnet_frame_id
+            vector_msg.header.frame_id = self.anygrasp_frame_id
             vector_msg.vector.x = observed[0] - expected[0]
             vector_msg.vector.y = observed[1] - expected[1]
             vector_msg.vector.z = observed[2] - expected[2]
-            self.graspnet_error_vector_pub.publish(vector_msg)
+            self.anygrasp_error_vector_pub.publish(vector_msg)
 
     @staticmethod
     def _finite_xyz(value):
@@ -248,7 +248,7 @@ class IsaacBridgeNode(Node):
     def _point_message(self, position, stamp):
         message = PointStamped()
         message.header.stamp = stamp
-        message.header.frame_id = self.graspnet_frame_id
+        message.header.frame_id = self.anygrasp_frame_id
         message.point.x, message.point.y, message.point.z = position
         return message
 

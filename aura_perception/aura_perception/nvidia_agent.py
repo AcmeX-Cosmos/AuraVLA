@@ -18,19 +18,33 @@ from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-# AuraVLA ROS2 structure imports
-# nvidia_agent.py location: aura_perception/aura_perception/nvidia_agent.py
-# Project root is 2 levels up
-_aura_root = Path(__file__).resolve().parent.parent.parent
+# AuraVLA ROS 2 package imports. The source tree and the installed ament
+# workspace have different layouts, so only add source paths when a real
+# workspace root can be identified.
+_configured_root = os.getenv("AURA_VLA_ROOT")
+_aura_root = (
+    Path(_configured_root).expanduser().resolve()
+    if _configured_root
+    else next(
+        (
+            _candidate
+            for _candidate in Path(__file__).resolve().parents
+            if (_candidate / "aura_bringup").is_dir()
+        ),
+        Path(__file__).resolve().parent,
+    )
+)
 _camera_bridge_path = _aura_root / "aura_hardware" / "aura_camera_bridge"
 _isaac_bridge_path = _aura_root / "aura_hardware" / "aura_isaac_bridge"
 _execution_path = _aura_root / "aura_execution" / "aura_execution"
 _planning_path = _aura_root / "aura_planning" / "aura_planning"
 
-# Add all required paths to sys.path
+# Add source paths for an editable/source checkout. Installed packages are
+# imported through their normal AuraVLA package names below.
 for _p in [_camera_bridge_path, _isaac_bridge_path, _execution_path, _planning_path]:
     if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
+        if _p.is_dir():
+            sys.path.insert(0, str(_p))
 
 # Import modules
 try:
@@ -54,9 +68,23 @@ except ImportError:
             metadata=_dir / 'metadata.json',
         )
 
-from isaac_runtime import IsaacRuntimeConfig, IsaacRuntimeLauncher
-from task_bridge import FileTaskClient
-from planner import TaskPlanner
+try:
+    from isaac_runtime import IsaacRuntimeConfig, IsaacRuntimeLauncher
+except ImportError:
+    from aura_isaac_bridge.isaac_runtime import (
+        IsaacRuntimeConfig,
+        IsaacRuntimeLauncher,
+    )
+
+try:
+    from aura_execution.task_bridge import FileTaskClient
+except ImportError:
+    from task_bridge import FileTaskClient
+
+try:
+    from aura_planning.planner import TaskPlanner
+except ImportError:
+    from planner import TaskPlanner
 from aura_planning.schemas import dumps_json, loads_json
 
 # Import scene_names from current package
@@ -1429,7 +1457,7 @@ def _dispatch_plan_to_isaac(
     plan = loads_json(plan_json)
     if not plan.get("doable", False):
         return None
-    print("executor> releasing VLM resources before GraspNet...", flush=True)
+    print("executor> releasing VLM resources before AnyGrasp...", flush=True)
     agent.release_resources()
     if runtime_launcher is not None:
         print("executor> checking Isaac runtime...", flush=True)

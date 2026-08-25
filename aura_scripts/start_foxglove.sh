@@ -17,7 +17,7 @@ fi
 
 echo "Starting AuraVLA Foxglove bridge"
 echo "  WebSocket: ws://localhost:8765"
-echo "  Topics:    /aura/graspnet/* and /aura/transport_tracking"
+echo "  Topics:    /aura/anygrasp/* and /aura/transport_tracking"
 
 # Match the RCIA-vision operational entry point while keeping AuraVLA's
 # workspace and topic namespace independent.

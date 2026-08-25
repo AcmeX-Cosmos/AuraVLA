@@ -22,3 +22,13 @@ dist/
 *.log
 
 .vscode/
+
+# AnyGrasp contains licensed SDK binaries, model checkpoints, and machine
+# license material. Keep all runtime assets local and out of the repository.
+aura_hardware/aura_isaac_bridge/thirdparty/anygrasp/sdk/
+aura_hardware/aura_isaac_bridge/thirdparty/anygrasp/dependencies/
+aura_hardware/aura_isaac_bridge/thirdparty/anygrasp/*.tar
+aura_hardware/aura_isaac_bridge/thirdparty/anygrasp/**/license/
+license_*/
+aura_hardware/thirdparty/anygrasp/
+aura_hardware/thirdparty/gr-convnet/

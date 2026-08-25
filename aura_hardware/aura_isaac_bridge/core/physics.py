@@ -50,7 +50,7 @@ def step_app(frames=1, render=True):
     """Advance physics by a fixed physics_dt, decoupled from rendering.
 
     `get_app().update()` runs the Kit main loop, so the physics step it drives
-    is as long as the frame took to render.  Under GraspNet/SAM GPU contention
+    is as long as the frame took to render.  Under AnyGrasp/SAM GPU contention
     that stretched to ~67 ms (the 15 Hz the trajectory constants were tuned
     against) versus the declared 16.7 ms, which is what makes the arm stutter
     and teleport: every frame integrates a different, unknown dt.

@@ -12,8 +12,8 @@ class TransportTelemetryTest(unittest.TestCase):
             path = Path(directory) / "transport_tracking.json"
             writer = TransportTelemetryWriter(path)
 
-            first = writer.publish({"event": "graspnet_transport_tracking", "error_m": 0.01})
-            second = writer.publish({"event": "graspnet_transport_tracking", "error_m": 0.02})
+            first = writer.publish({"event": "anygrasp_transport_tracking", "error_m": 0.01})
+            second = writer.publish({"event": "anygrasp_transport_tracking", "error_m": 0.02})
 
             self.assertEqual(first["sequence"], 1)
             self.assertEqual(second["sequence"], 2)

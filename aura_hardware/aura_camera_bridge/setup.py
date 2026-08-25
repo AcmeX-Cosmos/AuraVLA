@@ -4,7 +4,7 @@ setup(
     name='aura_camera_bridge',
     version='1.0.0',
     packages=[],
-    py_modules=['camera_bridge_node'],
+    py_modules=['camera_bridge_node', 'camera_bridge'],
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/aura_camera_bridge']),
         ('share/aura_camera_bridge', ['package.xml']),

@@ -32,7 +32,7 @@ agent:
     "6": "/camera"
     "7": "现在画面中有什么物体"
   # Used only after retryable NVIDIA failures. Successful requests always use
-  # the NVIDIA response before TaskPlanner, GraspNet, and Isaac execution.
+  # the NVIDIA response before TaskPlanner, AnyGrasp, and Isaac execution.
   fallback_tasks:
     "把香蕉放进篮子里": {object_name: banana, target_name: basket}
     "把杯子放进篮子里": {object_name: mug, target_name: basket}
@@ -58,11 +58,15 @@ camera:
   refresh_timeout_sec: 15
 
 perception:
-  graspnet_calibration:
+  anygrasp:
+    enabled: true
+    sdk_dir: "/home/acmex/Code/learning/courses/AuraVLA/aura_hardware/aura_isaac_bridge/thirdparty/anygrasp/sdk"
+    checkpoint_path: "/home/acmex/Code/learning/courses/AuraVLA/aura_hardware/aura_isaac_bridge/thirdparty/anygrasp/checkpoint_detection.tar"
+  anygrasp_calibration:
     enabled: true
     camera_offset_m: [0.000094005, 0.021269485, 0.018609223]
     max_correction_m: 0.06
-  graspnet_fusion:
+  anygrasp_fusion:
     # Fuse a short burst of fresh RGB-D observations before IK planning.
     frame_count: 3
     frame_interval_sec: 0.12
@@ -98,11 +102,11 @@ robot:
   grasp_clearance_guard_pad_m: 0.0005
   max_grasp_approach_tilt_deg: 15.0
   target_grasp_approach_tilt_deg: 10.0
-  # GraspNet is mandatory for all grasp actions. There is no scene-geometry
+  # AnyGrasp is mandatory for all grasp actions. There is no scene-geometry
   # fallback when the model or its checkpoint is unavailable.
-  graspnet_required: true
-  use_graspnet: true
-  use_graspnet_orientation: true
+  anygrasp_required: true
+  use_anygrasp: true
+  use_anygrasp_orientation: true
   gripper_close_frames: 120
   gripper_max_effort_n: 16.0
   gripper_stiffness: 500.0

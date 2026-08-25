@@ -74,11 +74,35 @@ Isaac execution: enabled
 Isaac camera: /tmp/aura-vla-camera
 ```
 
-## 4. GraspNet 运行要求
+## 4. AnyGrasp 运行要求
 
-AuraVLA 当前强制使用 GraspNet 生成抓取点。GraspNet baseline、Python 依赖和
-`checkpoint-rs.tar` 必须存在于配置的模型目录中；模型不可用时任务会安全终止，
+AuraVLA 当前强制使用 AnyGrasp 生成抓取点。AnyGrasp SDK、Python 依赖和
+官方 checkpoint 必须存在于 `aura_hardware/aura_isaac_bridge/thirdparty/anygrasp/`；模型不可用时任务会安全终止，
 不会回退到场景几何抓取。
+
+SDK 位于 `aura_hardware/aura_isaac_bridge/thirdparty/anygrasp/sdk`，其目录被 colcon 排除，仅由
+Isaac Sim 运行时加载。首次配置时执行：
+
+```bash
+git clone https://github.com/graspnet/anygrasp_sdk.git \
+  aura_hardware/aura_isaac_bridge/thirdparty/anygrasp/sdk
+```
+
+将官方 checkpoint 放入：
+
+```text
+aura_hardware/aura_isaac_bridge/thirdparty/anygrasp/checkpoint_detection.tar
+```
+
+模型路径可在 `aura_bringup/config/config.yaml` 的 `perception.anygrasp`
+中覆盖。没有有效许可证或 checkpoint 时，任务会返回 `ANYGRASP_UNAVAILABLE`。
+
+AnyGrasp 还需要与 Isaac Python/PyTorch CUDA 版本匹配的 MinkowskiEngine。
+如果运行时提示缺少该依赖，先安装 CUDA Toolkit（必须包含 `nvcc`），再执行：
+
+```bash
+bash aura_hardware/aura_isaac_bridge/thirdparty/anygrasp/install_minkowski_engine.sh
+```
 
 ## 5. 快捷指令
 
@@ -111,18 +135,18 @@ ros2 topic echo /aura/transport_tracking std_msgs/msg/String
 ```
 
 该话题会先发布 bridge 的 `waiting_for_event` 心跳；任务进入运输阶段后，
-发布 GraspNet 运输校验、物体偏差、重规划请求以及重规划结果。
+发布 AnyGrasp 运输校验、物体偏差、重规划请求以及重规划结果。
 
 Foxglove Plot 可直接使用以下标准话题：
 
 ```text
-/aura/graspnet/position_error_m
-/aura/graspnet/confidence
-/aura/graspnet/observed_position
-/aura/graspnet/expected_position
-/aura/graspnet/position_error_vector_m
-/aura/graspnet/replan
-/aura/graspnet/state
+/aura/anygrasp/position_error_m
+/aura/anygrasp/confidence
+/aura/anygrasp/observed_position
+/aura/anygrasp/expected_position
+/aura/anygrasp/position_error_vector_m
+/aura/anygrasp/replan
+/aura/anygrasp/state
 ```
 
 启动 Foxglove ROS 2 bridge（默认 WebSocket `ws://localhost:8765`）：
@@ -141,7 +165,7 @@ sudo apt install ros-humble-foxglove-bridge
 然后在 Foxglove Studio 连接 `ws://localhost:8765`，打开 **Plot** 面板，
 选择 `position_error_m`、`confidence` 或位置向量字段即可绘图。
 
-遥测 bridge 每 5 秒发布一次心跳，并重发最近一次有效 GraspNet 样本；Foxglove
+遥测 bridge 每 5 秒发布一次心跳，并重发最近一次有效 AnyGrasp 样本；Foxglove
 晚于任务启动连接时也能收到数据。新的任务执行后，Plot 会继续接收实时样本。
 
 ## 6. Agent 命令
@@ -191,7 +215,7 @@ ros2 topic echo /aura/transport_tracking std_msgs/msg/String
 
 ## 8. 常见问题
 
-### GraspNet 不可用
+### AnyGrasp 不可用
 
 检查模型目录和 checkpoint 配置，然后重新加载 Isaac 运行时：
 
@@ -199,7 +223,7 @@ ros2 topic echo /aura/transport_tracking std_msgs/msg/String
 ./aura_scripts/start_isaac_robot.sh
 ```
 
-任务响应会返回 `GRASPNET_UNAVAILABLE`，在模型恢复前不会执行抓取。
+任务响应会返回 `ANYGRASP_UNAVAILABLE`，在模型恢复前不会执行抓取。
 
 ### Isaac executor 不可用
 

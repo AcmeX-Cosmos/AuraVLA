@@ -12,6 +12,11 @@
   <depend>aura_interfaces</depend>
   <depend>sensor_msgs</depend>
   <depend>cv_bridge</depend>
+  <exec_depend>aura_camera_bridge</exec_depend>
+  <exec_depend>aura_execution</exec_depend>
+  <exec_depend>aura_isaac_bridge</exec_depend>
+  <exec_depend>aura_orchestration</exec_depend>
+  <exec_depend>aura_planning</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

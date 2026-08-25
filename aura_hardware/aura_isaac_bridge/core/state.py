@@ -39,10 +39,28 @@ DACH_RIGHT_ROBOT_DESCRIPTION_PATH = AURA_DIR / "config" / "aura_dach_tron2a_righ
 DACH_LEFT_RRT_CONFIG_PATH = AURA_DIR / "config" / "aura_dach_tron2a_left_rrt.yaml"
 DACH_RIGHT_RRT_CONFIG_PATH = AURA_DIR / "config" / "aura_dach_tron2a_right_rrt.yaml"
 
-DEFAULT_GRASPNET_DIR = SECTION3_DIR / "thirdparty" / "graspnet-baseline"
-GRASPNET_DIR = Path(os.environ.get("GRASPNET_BASELINE_DIR", DEFAULT_GRASPNET_DIR)).expanduser().resolve()
-GRASPNET_CHECKPOINT_PATH = Path(
-    os.environ.get("GRASPNET_CHECKPOINT_PATH", GRASPNET_DIR / "checkpoint-rs.tar")
+DEFAULT_ANYGRASP_DIR = (
+    PROJECT_ROOT / "aura_hardware" / "aura_isaac_bridge" / "thirdparty" / "anygrasp" / "sdk"
+)
+ANYGRASP_DIR = Path(
+    os.environ.get(
+        "ANYGRASP_DIR",
+        DEFAULT_ANYGRASP_DIR,
+    )
+).expanduser().resolve()
+DEFAULT_ANYGRASP_CHECKPOINT_PATH = (
+    PROJECT_ROOT
+    / "aura_hardware"
+    / "aura_isaac_bridge"
+    / "thirdparty"
+    / "anygrasp"
+    / "checkpoint_detection.tar"
+)
+ANYGRASP_CHECKPOINT_PATH = Path(
+    os.environ.get(
+        "ANYGRASP_CHECKPOINT_PATH",
+        DEFAULT_ANYGRASP_CHECKPOINT_PATH,
+    )
 ).expanduser().resolve()
 DEFAULT_SAM_MODEL_PATH = SECTION3_DIR / "sam2.1_b.pt"
 SAM_MODEL_PATH = os.environ.get(
@@ -54,14 +72,21 @@ CAMERA_PRIM_PATH = os.environ.get("AURA_CAMERA_PRIM_PATH", "/World/DACH_TRON2A/h
 CAMERA_RESOLUTION = (640, 360)
 CAMERA_PREVIEW_RESOLUTION = (640, 360)
 SHOW_GRASP_DEBUG = False
-GRASPNET_REQUIRED = os.environ.get(
-    "AURA_GRASPNET_REQUIRED", "true"
+ANYGRASP_REQUIRED = os.environ.get(
+    "AURA_ANYGRASP_REQUIRED",
+    "true",
 ).strip().lower() in {"true", "1", "yes", "on"}
-USE_GRASPNET = GRASPNET_REQUIRED or (
-    os.environ.get("AURA_USE_GRASPNET", "true").strip().lower()
+USE_ANYGRASP = ANYGRASP_REQUIRED or (
+    os.environ.get(
+        "AURA_USE_ANYGRASP",
+        "true",
+    ).strip().lower()
     in ("true", "1", "yes", "on")
 )
-USE_GRASPNET_ORIENTATION = os.environ.get("AURA_USE_GRASPNET_ORIENTATION", "false").strip().lower() in {"1", "true", "yes", "on"}
+USE_ANYGRASP_ORIENTATION = os.environ.get(
+    "AURA_USE_ANYGRASP_ORIENTATION",
+    "false",
+).strip().lower() in {"1", "true", "yes", "on"}
 DACH_SCENE_ROOT_PATH = "/World/DACH_TRON2A"
 DACH_ARTICULATION_ROOT_PATH = "/World/DACH_TRON2A/root_joint"
 
@@ -102,7 +127,7 @@ GRASP_POSITION_OFFSET = np.array([0.0, 0.0, -0.01])
 GRASP_INSERT_DEPTH = 0.015
 
 
-def _graspnet_calibration_vec3(name: str, default) -> np.ndarray:
+def _perception_calibration_vec3(name: str, default) -> np.ndarray:
     try:
         vector = np.asarray(json.loads(os.environ.get(name, json.dumps(default))), dtype=float)
     except (TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -112,36 +137,42 @@ def _graspnet_calibration_vec3(name: str, default) -> np.ndarray:
     return vector
 
 
-GRASPNET_CALIBRATION_ENABLED = os.environ.get(
-    "AURA_GRASPNET_CALIBRATION_ENABLED", "false"
+ANYGRASP_CALIBRATION_ENABLED = os.environ.get(
+    "AURA_ANYGRASP_CALIBRATION_ENABLED",
+    "false",
 ).strip().lower() in {"1", "true", "yes", "on"}
-GRASPNET_CAMERA_OFFSET = _graspnet_calibration_vec3(
-    "AURA_GRASPNET_CAMERA_OFFSET_JSON", [0.0, 0.0, 0.0]
+ANYGRASP_CAMERA_OFFSET = _perception_calibration_vec3(
+    "AURA_ANYGRASP_CAMERA_OFFSET_JSON", [0.0, 0.0, 0.0]
 )
-GRASPNET_CALIBRATION_MAX_CORRECTION = max(
-    float(os.environ.get("AURA_GRASPNET_CALIBRATION_MAX_CORRECTION_M", "0.06")),
+ANYGRASP_CALIBRATION_MAX_CORRECTION = max(
+    float(
+        os.environ.get(
+            "AURA_ANYGRASP_CALIBRATION_MAX_CORRECTION_M",
+            "0.06",
+        )
+    ),
     0.0,
 )
-GRASPNET_FUSION_FRAME_COUNT = max(
-    int(os.environ.get("AURA_GRASPNET_FUSION_FRAME_COUNT", "3")), 1
+ANYGRASP_FUSION_FRAME_COUNT = max(
+    int(os.environ.get("AURA_ANYGRASP_FUSION_FRAME_COUNT", "3")), 1
 )
-GRASPNET_FUSION_FRAME_INTERVAL_SEC = max(
-    float(os.environ.get("AURA_GRASPNET_FUSION_FRAME_INTERVAL_SEC", "0.12")), 0.0
+ANYGRASP_FUSION_FRAME_INTERVAL_SEC = max(
+    float(os.environ.get("AURA_ANYGRASP_FUSION_FRAME_INTERVAL_SEC", "0.12")), 0.0
 )
-GRASPNET_FUSION_MAX_POSITION_DISPERSION_M = max(
-    float(os.environ.get("AURA_GRASPNET_FUSION_MAX_POSITION_DISPERSION_M", "0.025")),
+ANYGRASP_FUSION_MAX_POSITION_DISPERSION_M = max(
+    float(os.environ.get("AURA_ANYGRASP_FUSION_MAX_POSITION_DISPERSION_M", "0.025")),
     0.001,
 )
-GRASPNET_FUSION_MAX_ORIENTATION_DISPERSION_DEG = max(
-    float(os.environ.get("AURA_GRASPNET_FUSION_MAX_ORIENTATION_DISPERSION_DEG", "25.0")),
+ANYGRASP_FUSION_MAX_ORIENTATION_DISPERSION_DEG = max(
+    float(os.environ.get("AURA_ANYGRASP_FUSION_MAX_ORIENTATION_DISPERSION_DEG", "25.0")),
     0.1,
 )
-GRASPNET_FUSION_POSITION_OUTLIER_FLOOR_M = max(
-    float(os.environ.get("AURA_GRASPNET_FUSION_POSITION_OUTLIER_FLOOR_M", "0.012")),
+ANYGRASP_FUSION_POSITION_OUTLIER_FLOOR_M = max(
+    float(os.environ.get("AURA_ANYGRASP_FUSION_POSITION_OUTLIER_FLOOR_M", "0.012")),
     0.001,
 )
-GRASPNET_FUSION_MIN_CONFIDENCE = float(
-    np.clip(float(os.environ.get("AURA_GRASPNET_FUSION_MIN_CONFIDENCE", "0.10")), 0.0, 1.0)
+ANYGRASP_FUSION_MIN_CONFIDENCE = float(
+    np.clip(float(os.environ.get("AURA_ANYGRASP_FUSION_MIN_CONFIDENCE", "0.10")), 0.0, 1.0)
 )
 
 # Desktop pick-and-place should remain predominantly top-down. The launcher
@@ -289,9 +320,8 @@ state = SimpleNamespace(
     planning_table_surface_z=None,
     planning_basket_obstacle=None,
     planning_basket_obstacle_enabled=False,
-    _graspnet_demo=None,
-    _graspnet_net=None,
-    _graspnet_imported=False,
+    _anygrasp_model=None,
+    _anygrasp_imported=False,
     _sam_model=None,
     _camera_preview_window=None,
     _camera_preview_provider=None,

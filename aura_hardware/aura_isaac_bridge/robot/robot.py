@@ -55,7 +55,8 @@ def _load_aura_runtime_config() -> None:
     robot = settings.get("robot") or {}
     camera = settings.get("camera") or {}
     perception = settings.get("perception") or {}
-    calibration = perception.get("graspnet_calibration") or {}
+    calibration = perception.get("anygrasp_calibration") or {}
+    anygrasp = perception.get("anygrasp") or {}
     scene = settings.get("scene") or {}
     basket = ((scene.get("objects") or {}).get("basket") or {})
 
@@ -66,16 +67,18 @@ def _load_aura_runtime_config() -> None:
     set_value("AURA_CAMERA_PRIM_PATH", camera.get("prim_path"))
     set_value("AURA_DACH_ARM_SIDE", str(robot.get("arm_side", "right")).lower())
     set_value("AURA_DACH_BASE_XY_JSON", json.dumps(robot.get("base_xy")))
-    set_value("AURA_GRASPNET_CALIBRATION_ENABLED", str(bool(calibration.get("enabled", False))).lower())
-    set_value("AURA_GRASPNET_CAMERA_OFFSET_JSON", json.dumps(calibration.get("camera_offset_m", [0.0, 0.0, 0.0])))
-    set_value("AURA_GRASPNET_CALIBRATION_MAX_CORRECTION_M", calibration.get("max_correction_m", 0.06))
-    fusion = perception.get("graspnet_fusion") or {}
-    set_value("AURA_GRASPNET_FUSION_FRAME_COUNT", fusion.get("frame_count", 3))
-    set_value("AURA_GRASPNET_FUSION_FRAME_INTERVAL_SEC", fusion.get("frame_interval_sec", 0.12))
-    set_value("AURA_GRASPNET_FUSION_MAX_POSITION_DISPERSION_M", fusion.get("max_position_dispersion_m", 0.025))
-    set_value("AURA_GRASPNET_FUSION_MAX_ORIENTATION_DISPERSION_DEG", fusion.get("max_orientation_dispersion_deg", 25.0))
-    set_value("AURA_GRASPNET_FUSION_POSITION_OUTLIER_FLOOR_M", fusion.get("position_outlier_floor_m", 0.012))
-    set_value("AURA_GRASPNET_FUSION_MIN_CONFIDENCE", fusion.get("min_confidence", 0.10))
+    set_value("ANYGRASP_DIR", anygrasp.get("sdk_dir"))
+    set_value("ANYGRASP_CHECKPOINT_PATH", anygrasp.get("checkpoint_path"))
+    set_value("AURA_ANYGRASP_CALIBRATION_ENABLED", str(bool(calibration.get("enabled", False))).lower())
+    set_value("AURA_ANYGRASP_CAMERA_OFFSET_JSON", json.dumps(calibration.get("camera_offset_m", [0.0, 0.0, 0.0])))
+    set_value("AURA_ANYGRASP_CALIBRATION_MAX_CORRECTION_M", calibration.get("max_correction_m", 0.06))
+    fusion = perception.get("anygrasp_fusion") or {}
+    set_value("AURA_ANYGRASP_FUSION_FRAME_COUNT", fusion.get("frame_count", 3))
+    set_value("AURA_ANYGRASP_FUSION_FRAME_INTERVAL_SEC", fusion.get("frame_interval_sec", 0.12))
+    set_value("AURA_ANYGRASP_FUSION_MAX_POSITION_DISPERSION_M", fusion.get("max_position_dispersion_m", 0.025))
+    set_value("AURA_ANYGRASP_FUSION_MAX_ORIENTATION_DISPERSION_DEG", fusion.get("max_orientation_dispersion_deg", 25.0))
+    set_value("AURA_ANYGRASP_FUSION_POSITION_OUTLIER_FLOOR_M", fusion.get("position_outlier_floor_m", 0.012))
+    set_value("AURA_ANYGRASP_FUSION_MIN_CONFIDENCE", fusion.get("min_confidence", 0.10))
     set_value("AURA_BASKET_RESET_POSITION_JSON", json.dumps(basket.get("reset_position")))
     set_value("AURA_BASKET_RESET_ORIENTATION_JSON", json.dumps(basket.get("reset_orientation")))
 
@@ -140,13 +143,13 @@ def _load_aura_runtime_config() -> None:
         "AURA_GRASP_REFINEMENT_STEPS": ("grasp_refinement_steps", 0),
         "AURA_CARRY_APEX_CLEARANCE": ("carry_apex_clearance_m", 0.15),
         "AURA_DUAL_ARM_MIN_TCP_SEPARATION": ("dual_arm_min_tcp_separation_m", 0.18),
-        "AURA_GRASPNET_REQUIRED": ("graspnet_required", True),
+        "AURA_ANYGRASP_REQUIRED": ("anygrasp_required", True),
     }
     for env_name, (key, default) in config_env.items():
         if key in robot:
             set_value(env_name, robot.get(key, default))
-    set_value("AURA_USE_GRASPNET", str(bool(robot.get("use_graspnet", True))).lower())
-    set_value("AURA_USE_GRASPNET_ORIENTATION", str(bool(robot.get("use_graspnet_orientation", False))).lower())
+    set_value("AURA_USE_ANYGRASP", str(bool(robot.get("use_anygrasp", True))).lower())
+    set_value("AURA_USE_ANYGRASP_ORIENTATION", str(bool(robot.get("use_anygrasp_orientation", False))).lower())
     set_value("AURA_PHYSX_ENABLE_CCD", str(bool(robot.get("physx_enable_ccd", False))).lower())
     set_value("AURA_PHYSX_CONVEX_SHRINK_WRAP", str(bool(robot.get("physx_convex_shrink_wrap", True))).lower())
     set_value("AURA_SCENE_OBJECTS_JSON", json.dumps(scene.get("objects") or {}, ensure_ascii=False))
@@ -174,14 +177,14 @@ from aura_isaac_bridge.core.state import state
 from aura_isaac_bridge.core.state import (
     PROJECT_ROOT, ISAAC_SIM_ROOT, ISAAC_SITE_PACKAGES, STUDY_DIR, AURA_DIR, SECTION3_DIR,
     DEFAULT_PROJECT_ROOT, DEFAULT_ISAAC_SIM_ROOT, DEFAULT_ISAAC_SITE_PACKAGES,
-    GRASPNET_DIR, GRASPNET_CHECKPOINT_PATH, SAM_MODEL_PATH,
-    DEFAULT_GRASPNET_DIR, DEFAULT_SAM_MODEL_PATH,
+    ANYGRASP_DIR, ANYGRASP_CHECKPOINT_PATH, SAM_MODEL_PATH,
+    DEFAULT_ANYGRASP_DIR, DEFAULT_SAM_MODEL_PATH,
     CAMERA_PRIM_PATH, CAMERA_RESOLUTION, CAMERA_PREVIEW_RESOLUTION,
-    SHOW_GRASP_DEBUG, USE_GRASPNET, USE_GRASPNET_ORIENTATION,
-    GRASPNET_FUSION_FRAME_COUNT, GRASPNET_FUSION_FRAME_INTERVAL_SEC,
-    GRASPNET_FUSION_MAX_POSITION_DISPERSION_M,
-    GRASPNET_FUSION_MAX_ORIENTATION_DISPERSION_DEG,
-    GRASPNET_FUSION_POSITION_OUTLIER_FLOOR_M, GRASPNET_FUSION_MIN_CONFIDENCE,
+    SHOW_GRASP_DEBUG, USE_ANYGRASP, USE_ANYGRASP_ORIENTATION,
+    ANYGRASP_FUSION_FRAME_COUNT, ANYGRASP_FUSION_FRAME_INTERVAL_SEC,
+    ANYGRASP_FUSION_MAX_POSITION_DISPERSION_M,
+    ANYGRASP_FUSION_MAX_ORIENTATION_DISPERSION_DEG,
+    ANYGRASP_FUSION_POSITION_OUTLIER_FLOOR_M, ANYGRASP_FUSION_MIN_CONFIDENCE,
     DACH_SCENE_ROOT_PATH, DACH_ARTICULATION_ROOT_PATH,
     TRON2_URDF_PATH, DACH_ROBOT_DESCRIPTION_PATH, DACH_RIGHT_ROBOT_DESCRIPTION_PATH,
     DACH_LEFT_RRT_CONFIG_PATH, DACH_RIGHT_RRT_CONFIG_PATH,
@@ -237,8 +240,8 @@ from aura_isaac_bridge.core.perception import (
     initialize_grasp_camera, capture_camera_data, show_camera_preview,
     get_current_object_center, create_sam_prompt_points,
     segment_target_with_sam,
-    ensure_graspnet_python_dependencies, load_graspnet_demo,
-    release_cuda_inference_cache, infer_graspnet_world_pose,
+    ensure_anygrasp_python_dependencies, load_anygrasp_model,
+    release_cuda_inference_cache, infer_anygrasp_world_pose,
     resolve_scene_prim_path,
 )
 from aura_isaac_bridge.core.motion import (
@@ -295,10 +298,10 @@ SCENE_NAME_RESOLVER = state.SCENE_NAME_RESOLVER
 
 print("=== 开始执行脚本 ===")
 print(f"📁 AuraVLA 项目目录: {PROJECT_ROOT}")
-print(f"📁 GraspNet baseline 目录: {GRASPNET_DIR}")
+print(f"📁 AnyGrasp SDK 目录: {ANYGRASP_DIR}")
 
 # ── 1. SimulationContext ──────────────────────────────────────────
-print(f"📁 GraspNet baseline 目录: {GRASPNET_DIR}")
+print(f"📁 AnyGrasp SDK 目录: {ANYGRASP_DIR}")
 
 # 1. 获取/创建 SimulationContext（物理引擎核心）
 state.sim_context = SimulationContext.instance()

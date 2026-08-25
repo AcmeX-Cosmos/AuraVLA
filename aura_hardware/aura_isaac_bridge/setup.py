@@ -4,7 +4,7 @@ setup(
     name='aura_isaac_bridge',
     version='1.0.0',
     packages=[],
-    py_modules=['isaac_bridge_node'],
+    py_modules=['isaac_bridge_node', 'isaac_runtime'],
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/aura_isaac_bridge']),
         ('share/aura_isaac_bridge', ['package.xml']),

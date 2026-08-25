@@ -19,7 +19,10 @@ for _path in (
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from task_bridge import FileTaskClient
+try:
+    from aura_execution.task_bridge import FileTaskClient
+except ImportError:
+    from task_bridge import FileTaskClient
 
 
 class IsaacRuntimeError(RuntimeError):

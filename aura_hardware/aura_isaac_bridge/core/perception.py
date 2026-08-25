@@ -1,8 +1,9 @@
-"""AuraVLA 感知模块：BBox、PCA、网格质心、SAM、GraspNet 与相机。"""
+"""AuraVLA 感知模块：BBox、PCA、网格质心、SAM、AnyGrasp 与相机。"""
 
 from __future__ import annotations
 
 import importlib
+import importlib.machinery
 import json
 import math
 import os
@@ -12,6 +13,7 @@ import sys
 import time
 import zlib
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 
 import cv2
 import numpy as np
@@ -30,17 +32,17 @@ from aura_isaac_bridge.core.state import state
 from aura_isaac_bridge.core.state import (
     PROJECT_ROOT, ISAAC_SIM_ROOT, ISAAC_SITE_PACKAGES, STUDY_DIR, AURA_DIR, SECTION3_DIR,
     DEFAULT_PROJECT_ROOT, DEFAULT_ISAAC_SIM_ROOT, DEFAULT_ISAAC_SITE_PACKAGES,
-    GRASPNET_DIR, GRASPNET_CHECKPOINT_PATH, SAM_MODEL_PATH,
-    DEFAULT_GRASPNET_DIR, DEFAULT_SAM_MODEL_PATH,
+    ANYGRASP_DIR, ANYGRASP_CHECKPOINT_PATH, SAM_MODEL_PATH,
+    DEFAULT_ANYGRASP_DIR, DEFAULT_SAM_MODEL_PATH,
+    ANYGRASP_CALIBRATION_ENABLED, ANYGRASP_CAMERA_OFFSET,
+    ANYGRASP_CALIBRATION_MAX_CORRECTION,
     CAMERA_PRIM_PATH, CAMERA_RESOLUTION, CAMERA_PREVIEW_RESOLUTION,
-    SHOW_GRASP_DEBUG, USE_GRASPNET, USE_GRASPNET_ORIENTATION,
+    SHOW_GRASP_DEBUG, USE_ANYGRASP, USE_ANYGRASP_ORIENTATION,
     GRASP_POSITION_OFFSET, GRASP_INSERT_DEPTH,
-    GRASPNET_CALIBRATION_ENABLED, GRASPNET_CAMERA_OFFSET,
-    GRASPNET_CALIBRATION_MAX_CORRECTION,
-    GRASPNET_FUSION_FRAME_COUNT, GRASPNET_FUSION_FRAME_INTERVAL_SEC,
-    GRASPNET_FUSION_MAX_POSITION_DISPERSION_M,
-    GRASPNET_FUSION_MAX_ORIENTATION_DISPERSION_DEG,
-    GRASPNET_FUSION_POSITION_OUTLIER_FLOOR_M, GRASPNET_FUSION_MIN_CONFIDENCE,
+    ANYGRASP_FUSION_FRAME_COUNT, ANYGRASP_FUSION_FRAME_INTERVAL_SEC,
+    ANYGRASP_FUSION_MAX_POSITION_DISPERSION_M,
+    ANYGRASP_FUSION_MAX_ORIENTATION_DISPERSION_DEG,
+    ANYGRASP_FUSION_POSITION_OUTLIER_FLOOR_M, ANYGRASP_FUSION_MIN_CONFIDENCE,
 )
 from aura_isaac_bridge.core.physics import step_app
 from aura_isaac_bridge.core.grasp_fusion import (
@@ -444,7 +446,7 @@ def initialize_grasp_camera(stage):
     camera.initialize()
     camera.add_distance_to_image_plane_to_frame()
     camera.add_rgb_to_frame()
-    print(f"✅ GraspNet 相机初始化完成: {CAMERA_PRIM_PATH}, resolution={CAMERA_RESOLUTION}")
+    print(f"✅ AnyGrasp 相机初始化完成: {CAMERA_PRIM_PATH}, resolution={CAMERA_RESOLUTION}")
     print("📷 相机内参:\n", camera.get_intrinsics_matrix())
     return camera
 
@@ -497,7 +499,7 @@ def show_camera_preview(rgb_data, prompt_points=None, prompt_labels=None):
         [preview_width, preview_height],
     )
     state._camera_preview_window = ui.Window(
-        "GraspNet Camera RGB",
+        "AnyGrasp Camera RGB",
         width=preview_width + 30,
         height=preview_height + 55,
     )
@@ -512,7 +514,7 @@ def show_camera_preview(rgb_data, prompt_points=None, prompt_labels=None):
 
     state._camera_preview_window.visible = True
     step_app(2)
-    print("📷 相机预览已打开，继续执行 SAM、GraspNet 和机械臂夹取。")
+    print("📷 相机预览已打开，继续执行 SAM、AnyGrasp 和机械臂夹取。")
 
 def get_current_object_center(stage, target_prim, prim_path=None):
     return get_current_bbox_center(stage, target_prim, prim_path)[0]
@@ -575,16 +577,38 @@ def segment_target_with_sam(stage, camera, target_prim, rgb_data, prim_path=None
     if mask.shape != rgb_data.shape[:2]:
         mask = cv2.resize(mask, (rgb_data.shape[1], rgb_data.shape[0]), interpolation=cv2.INTER_NEAREST)
     if not np.any(mask):
-        raise RuntimeError("SAM 掩码为空，无法执行 GraspNet 推理。")
+        raise RuntimeError("SAM 掩码为空，无法执行 AnyGrasp 推理。")
     return mask
 
-def ensure_graspnet_python_dependencies():
+def ensure_anygrasp_python_dependencies():
+    """Load the licensed AnyGrasp SDK from the isolated project directory."""
     site_packages_path = str(ISAAC_SITE_PACKAGES)
     if not ISAAC_SITE_PACKAGES.is_dir():
         raise RuntimeError(
             f"未找到 Isaac Python site-packages: {ISAAC_SITE_PACKAGES}。"
             "请通过 ISAAC_PYTHON_SITE_PACKAGES 指定实际目录。"
         )
+    grasp_detection_dir = ANYGRASP_DIR / "grasp_detection"
+    anygrasp_root = ANYGRASP_DIR.parent
+    if not grasp_detection_dir.is_dir():
+        raise RuntimeError(
+            f"未找到 AnyGrasp SDK: {grasp_detection_dir}。"
+            "请将官方 AnyGrasp SDK 放入项目 AnyGrasp/sdk，或设置 ANYGRASP_DIR。"
+        )
+    sdk_paths = (
+        ANYGRASP_DIR,
+        grasp_detection_dir,
+        grasp_detection_dir / "gsnet_versions",
+        ANYGRASP_DIR / "pointnet2",
+        anygrasp_root / "dependencies" / "python",
+    )
+    private_python_dir = anygrasp_root / "dependencies" / "python"
+    sdk_paths += tuple(private_python_dir.glob("pointnet2-*.egg"))
+    for sdk_path in sdk_paths:
+        path = str(sdk_path)
+        if sdk_path.is_dir() and path not in sys.path:
+            sys.path.insert(0, path)
+            sys.path_importer_cache.pop(path, None)
     sys.path[:] = [path for path in sys.path if path != site_packages_path]
     site.addsitedir(site_packages_path)
     sys.path.remove(site_packages_path)
@@ -593,86 +617,72 @@ def ensure_graspnet_python_dependencies():
     importlib.invalidate_caches()
     print(f"✅ 已刷新 Isaac Python 依赖目录: {site_packages_path}")
 
-    required_modules = ("filelock", "open3d", "ultralytics", "grasp_nms")
-    for module_name in required_modules:
-        if sys.modules.get(module_name) is None:
-            for loaded_module_name in list(sys.modules):
-                if loaded_module_name == module_name or loaded_module_name.startswith(module_name + "."):
-                    sys.modules.pop(loaded_module_name, None)
-    missing_modules = [
-        name
-        for name in required_modules
-        if not (ISAAC_SITE_PACKAGES / name).is_dir()
-        and not (ISAAC_SITE_PACKAGES / f"{name}.py").is_file()
-        and not any(ISAAC_SITE_PACKAGES.glob(f"{name}.*"))
-    ]
-    if missing_modules:
-        raise RuntimeError(
-            "Isaac Python 缺少 GraspNet 依赖: "
-            f"{', '.join(missing_modules)}。当前依赖目录: {site_packages_path}"
+    # The licensed SDK binary bundles legacy Python code that still references
+    # NumPy aliases removed in NumPy 1.24. Keep this compatibility shim local
+    # to the AnyGrasp adapter instead of changing Isaac's global environment.
+    if "float" not in np.__dict__:
+        np.float = float
+    if "int" not in np.__dict__:
+        np.int = int
+    if "bool" not in np.__dict__:
+        np.bool = bool
+
+    # AnyGrasp's embedded legacy module imports IPython even in headless
+    # inference. Isaac Sim does not ship the notebook package, and inference
+    # does not require its interactive APIs.
+    if importlib.util.find_spec("IPython") is None:
+        ipython_stub = ModuleType("IPython")
+        ipython_stub.__spec__ = importlib.machinery.ModuleSpec(
+            "IPython", loader=None
         )
+        sys.modules.setdefault("IPython", ipython_stub)
 
-def load_graspnet_demo():
-    if state._graspnet_demo is not None:
-        return state._graspnet_demo
-    ensure_graspnet_python_dependencies()
-    demo_path = GRASPNET_DIR / "demo.py"
-    if not demo_path.is_file():
-        replacement_demo = SECTION3_DIR / "thirdparty" / "graspnet-baseline_change" / "demo.py"
+    importlib.invalidate_caches()
+    try:
+        importlib.import_module("MinkowskiEngine")
+        importlib.import_module("pointnet2._ext")
+        importlib.import_module("gsnet")
+    except Exception as exc:
         raise RuntimeError(
-            "未找到完整的 graspnet-baseline。请将其放到 "
-            f"{GRASPNET_DIR}，并用 {replacement_demo} 替换 baseline 中的 demo.py；"
-            "也可以通过 GRASPNET_BASELINE_DIR 指定实际目录。"
-        )
-    if not GRASPNET_CHECKPOINT_PATH.is_file():
+            "AnyGrasp 依赖不可用：需要 Isaac Python 中的 MinkowskiEngine，"
+            "PointNet++ CUDA 扩展，并确认 SDK 的 gsnet 二进制、license 目录和 Python 版本匹配。"
+        ) from exc
+    print(f"✅ AnyGrasp 依赖路径已就绪: {ANYGRASP_DIR}")
+
+
+def load_anygrasp_model():
+    """Create one resident AnyGrasp model for the entire Isaac session."""
+    if state._anygrasp_model is not None:
+        return state._anygrasp_model
+    ensure_anygrasp_python_dependencies()
+    if not ANYGRASP_CHECKPOINT_PATH.is_file():
         raise RuntimeError(
-            f"未找到 GraspNet 权重: {GRASPNET_CHECKPOINT_PATH}。"
-            "请放入 checkpoint-rs.tar，或设置 GRASPNET_CHECKPOINT_PATH。"
+            f"未找到 AnyGrasp 权重: {ANYGRASP_CHECKPOINT_PATH}。"
+            "请将官方 checkpoint_detection.tar 放入项目 AnyGrasp，"
+            "或设置 ANYGRASP_CHECKPOINT_PATH。"
         )
+    config = SimpleNamespace(
+        checkpoint_path=str(ANYGRASP_CHECKPOINT_PATH),
+        max_gripper_width=0.10,
+        gripper_height=0.03,
+    )
+    try:
+        from gsnet import create_detector
+    except Exception as exc:
+        raise RuntimeError("AnyGrasp SDK 已配置，但 gsnet.create_detector 导入失败。") from exc
+    try:
+        model = create_detector(config)
+    except Exception as exc:
+        raise RuntimeError(
+            f"AnyGrasp 模型加载失败: {ANYGRASP_CHECKPOINT_PATH}; {type(exc).__name__}: {exc}"
+        ) from exc
+    if model is None:
+        raise RuntimeError("AnyGrasp create_detector 返回 None，可能是许可证校验失败。")
+    state._anygrasp_model = model
+    state._anygrasp_imported = True
+    print(f"✅ AnyGrasp 模型已加载: {ANYGRASP_CHECKPOINT_PATH}")
+    return model
 
-    module_name = "section3_graspnet_demo"
-    graspnet_dir_path = str(GRASPNET_DIR)
-    if graspnet_dir_path not in sys.path:
-        sys.path.insert(0, graspnet_dir_path)
-        sys.path_importer_cache.pop(graspnet_dir_path, None)
-        importlib.invalidate_caches()
-    if module_name in sys.modules:
-        demo_module = sys.modules[module_name]
-    else:
-        spec = importlib.util.spec_from_file_location(module_name, demo_path)
-        if spec is None or spec.loader is None:
-            raise RuntimeError(f"无法加载 GraspNet demo: {demo_path}")
-        demo_module = importlib.util.module_from_spec(spec)
-        original_argv = sys.argv
-        try:
-            sys.argv = [original_argv[0]]
-            sys.modules[module_name] = demo_module
-            spec.loader.exec_module(demo_module)
-        except Exception:
-            sys.modules.pop(module_name, None)
-            raise
-        finally:
-            sys.argv = original_argv
-
-    if not hasattr(demo_module, "demo_variable"):
-        raise RuntimeError(f"{demo_path} 不包含 demo_variable，请使用 section3 提供的改版 demo.py。")
-    if hasattr(demo_module, "cfgs"):
-        demo_module.cfgs.checkpoint_path = str(GRASPNET_CHECKPOINT_PATH)
-    # The upstream demo creates and loads the network inside every
-    # demo_variable call. Keep the upstream API but make the model process
-    # resident for Aura's temporal RGB-D burst.
-    original_get_net = getattr(demo_module, "get_net", None)
-    if original_get_net is not None and not getattr(demo_module, "_aura_cached_get_net", False):
-        def cached_get_net():
-            if state._graspnet_net is None:
-                state._graspnet_net = original_get_net()
-            return state._graspnet_net
-
-        demo_module.get_net = cached_get_net
-        demo_module._aura_cached_get_net = True
-    state._graspnet_demo = demo_module
-    state._graspnet_imported = True
-    return demo_module
 
 def release_cuda_inference_cache():
     import gc
@@ -684,30 +694,71 @@ def release_cuda_inference_cache():
     torch_module.cuda.empty_cache()
     if hasattr(torch_module.cuda, "ipc_collect"):
         torch_module.cuda.ipc_collect()
-    print("✅ 已释放 SAM/GraspNet CUDA 缓存")
+    print("✅ 已释放 SAM/AnyGrasp CUDA 缓存")
 
-def _apply_graspnet_camera_calibration(
+def _apply_anygrasp_camera_calibration(
     grasp_position,
     camera_position,
     camera_orientation,
 ):
-    """Apply one weighted multi-object GraspNet bias in the camera frame."""
-    if not GRASPNET_CALIBRATION_ENABLED:
+    """Apply the configured AnyGrasp camera-frame calibration bias."""
+    if not ANYGRASP_CALIBRATION_ENABLED:
         return np.asarray(grasp_position, dtype=float), np.zeros(3, dtype=float)
 
     world_from_camera = quat_to_rot_matrix(camera_orientation)
-    correction_world = np.asarray(world_from_camera, dtype=float) @ GRASPNET_CAMERA_OFFSET
+    correction_world = np.asarray(world_from_camera, dtype=float) @ ANYGRASP_CAMERA_OFFSET
     correction_norm = float(np.linalg.norm(correction_world))
     if (
-        GRASPNET_CALIBRATION_MAX_CORRECTION > 0.0
-        and correction_norm > GRASPNET_CALIBRATION_MAX_CORRECTION
+        ANYGRASP_CALIBRATION_MAX_CORRECTION > 0.0
+        and correction_norm > ANYGRASP_CALIBRATION_MAX_CORRECTION
     ):
-        correction_world *= GRASPNET_CALIBRATION_MAX_CORRECTION / correction_norm
+        correction_world *= ANYGRASP_CALIBRATION_MAX_CORRECTION / correction_norm
     return np.asarray(grasp_position, dtype=float) + correction_world, correction_world
 
 
-def _graspnet_observation_from_frame(
-    demo_module,
+def _masked_rgbd_point_cloud(rgb_data, depth_mm, mask, intrinsic):
+    """Convert the segmented RGB-D crop to AnyGrasp's camera-frame cloud."""
+    valid = mask.astype(bool) & np.isfinite(depth_mm) & (depth_mm > 0.0)
+    rows, cols = np.nonzero(valid)
+    if rows.size < 32:
+        raise RuntimeError("AnyGrasp 点云有效点不足 32 个")
+    max_points = 20000
+    if rows.size > max_points:
+        indices = np.linspace(0, rows.size - 1, max_points, dtype=int)
+        rows, cols = rows[indices], cols[indices]
+    depth_m = np.asarray(depth_mm[rows, cols], dtype=np.float32) * 0.001
+    fx = float(intrinsic[0, 0])
+    fy = float(intrinsic[1, 1])
+    cx = float(intrinsic[0, 2])
+    cy = float(intrinsic[1, 2])
+    if min(fx, fy) <= 1e-6:
+        raise RuntimeError("相机内参焦距无效，无法生成 AnyGrasp 点云")
+    points = np.column_stack(
+        ((cols.astype(np.float32) - cx) * depth_m / fx,
+         (rows.astype(np.float32) - cy) * depth_m / fy,
+         depth_m)
+    ).astype(np.float32)
+    colors = np.asarray(rgb_data[rows, cols], dtype=np.float32) / 255.0
+    return points, colors
+
+
+def _select_anygrasp_candidate(grasp_group):
+    if isinstance(grasp_group, tuple):
+        grasp_group = grasp_group[0]
+    if hasattr(grasp_group, "nms"):
+        grasp_group = grasp_group.nms()
+    if hasattr(grasp_group, "sort_by_score"):
+        grasp_group = grasp_group.sort_by_score()
+    try:
+        if len(grasp_group) == 0:
+            return None
+        return grasp_group[0]
+    except TypeError:
+        return grasp_group
+
+
+def _anygrasp_observation_from_frame(
+    anygrasp_model,
     rgb_data,
     depth_mm,
     mask,
@@ -720,16 +771,33 @@ def _graspnet_observation_from_frame(
     valid_ratio = float(np.count_nonzero(valid_depth)) / max(float(np.count_nonzero(valid_mask)), 1.0)
     if valid_ratio <= 0.05:
         raise RuntimeError("SAM 掩码区域有效深度不足")
-    detected_grasp = demo_module.demo_variable(
-        rgb_data,
-        depth_mm,
-        mask,
-        intrinsic,
+    points, colors = _masked_rgbd_point_cloud(
+        rgb_data, depth_mm, mask, intrinsic
     )
+    try:
+        result = anygrasp_model.get_grasp(
+            points,
+            {
+                "dense_grasp": False,
+                "collision_detection": True,
+                "region_steering": None,
+                "approach_steering": None,
+                "approach_thresh": np.pi,
+            },
+        )
+    except Exception as exc:
+        raise RuntimeError(f"AnyGrasp 推理失败: {exc}") from exc
+    detected_grasp = _select_anygrasp_candidate(result)
     if detected_grasp is None:
-        raise RuntimeError("GraspNet 未返回抓取候选。")
+        raise RuntimeError("AnyGrasp 未返回抓取候选。")
     world_from_camera = get_transform(camera_position, quat_to_rot_matrix(camera_orientation))
-    camera_from_grasp = get_transform(detected_grasp.translation, detected_grasp.rotation_matrix)
+    grasp_rotation = np.asarray(detected_grasp.rotation_matrix, dtype=float)
+    grasp_translation = np.asarray(detected_grasp.translation, dtype=float)
+    # AnyGrasp reports the grasp center. Its documented TCP position is the
+    # center plus depth along the first rotation axis.
+    grasp_depth = float(getattr(detected_grasp, "depth", 0.0))
+    grasp_tip = grasp_translation + grasp_depth * grasp_rotation[:, 0]
+    camera_from_grasp = get_transform(grasp_tip, grasp_rotation)
     camera_axis_correction = get_transform([0, 0, 0], [[1, 0, 0], [0, -1, 0], [0, 0, -1]])
     gripper_axis_correction = get_transform([0, 0, 0], [[0, 0, 1], [0, -1, 0], [1, 0, 0]])
     world_from_grasp = (
@@ -743,9 +811,9 @@ def _graspnet_observation_from_frame(
     grasp_position = (
         world_from_grasp[:3, 3]
         + GRASP_POSITION_OFFSET
-        + grasp_approach_direction * GRASP_INSERT_DEPTH
+        # AnyGrasp already accounts for gripper insertion depth above.
     )
-    grasp_position, calibration_world_offset = _apply_graspnet_camera_calibration(
+    grasp_position, calibration_world_offset = _apply_anygrasp_camera_calibration(
         grasp_position,
         np.asarray(camera_position, dtype=float),
         np.asarray(camera_orientation, dtype=float),
@@ -753,23 +821,23 @@ def _graspnet_observation_from_frame(
     return GraspObservation(
         position=grasp_position,
         orientation=rot_matrix_to_quat(world_from_grasp[:3, :3]),
-        score=float(getattr(detected_grasp, "score", 1.0)),
+        score=float(np.asarray(getattr(detected_grasp, "score", 1.0)).reshape(-1)[0]),
         depth_quality=valid_ratio,
         geometric_validity=1.0 if np.all(np.isfinite(grasp_position)) else 0.0,
     ), calibration_world_offset
 
 
-def infer_graspnet_fused_world_pose(
+def infer_anygrasp_fused_world_pose(
     stage,
     camera,
     target_prim,
     *,
-    frame_count=GRASPNET_FUSION_FRAME_COUNT,
-    frame_interval_sec=GRASPNET_FUSION_FRAME_INTERVAL_SEC,
+    frame_count=ANYGRASP_FUSION_FRAME_COUNT,
+    frame_interval_sec=ANYGRASP_FUSION_FRAME_INTERVAL_SEC,
     apply_calibration=True,
 ):
     """Infer a stable world grasp pose from a short fresh RGB-D burst."""
-    demo_module = load_graspnet_demo()
+    anygrasp_model = load_anygrasp_model()
     frame_count = max(int(frame_count), 1)
     rgb_data, depth_mm = capture_camera_data(camera)
     mask = segment_target_with_sam(
@@ -799,8 +867,8 @@ def infer_graspnet_fused_world_pose(
             name="grasp_camera_pose", prim_path=CAMERA_PRIM_PATH
         ).get_world_pose()
         try:
-            observation, calibration_offset = _graspnet_observation_from_frame(
-                demo_module,
+            observation, calibration_offset = _anygrasp_observation_from_frame(
+                anygrasp_model,
                 rgb_data,
                 depth_mm,
                 mask,
@@ -809,7 +877,7 @@ def infer_graspnet_fused_world_pose(
                 camera_orientation,
             )
         except Exception as exc:
-            print(f"⚠️ GraspNet 第 {frame_index + 1}/{frame_count} 帧无效: {exc}")
+            print(f"⚠️ AnyGrasp 第 {frame_index + 1}/{frame_count} 帧无效: {exc}")
             continue
         outside_distance = np.maximum(expanded_bbox_min - observation.position, 0.0)
         outside_distance += np.maximum(observation.position - expanded_bbox_max, 0.0)
@@ -838,10 +906,10 @@ def infer_graspnet_fused_world_pose(
 
     fused = fuse_grasp_observations(
         observations,
-        max_position_dispersion_m=GRASPNET_FUSION_MAX_POSITION_DISPERSION_M,
-        max_orientation_dispersion_deg=GRASPNET_FUSION_MAX_ORIENTATION_DISPERSION_DEG,
-        position_outlier_floor_m=GRASPNET_FUSION_POSITION_OUTLIER_FLOOR_M,
-        min_confidence=GRASPNET_FUSION_MIN_CONFIDENCE,
+        max_position_dispersion_m=ANYGRASP_FUSION_MAX_POSITION_DISPERSION_M,
+        max_orientation_dispersion_deg=ANYGRASP_FUSION_MAX_ORIENTATION_DISPERSION_DEG,
+        position_outlier_floor_m=ANYGRASP_FUSION_POSITION_OUTLIER_FLOOR_M,
+        min_confidence=ANYGRASP_FUSION_MIN_CONFIDENCE,
     )
     grasp_position = np.asarray(fused["position"], dtype=float)
     grasp_orientation = np.asarray(fused["orientation"], dtype=float)
@@ -861,7 +929,7 @@ def infer_graspnet_fused_world_pose(
     )
     fused["inference_duration_sec"] = round(time.perf_counter() - started, 3)
     print(
-        "✅ GraspNet 多帧融合: "
+        "✅ AnyGrasp 多帧融合: "
         f"accepted={fused['accepted_frame_count']}/{fused['frame_count']}, "
         f"position_std={fused['position_std_m']:.4f} m, "
         f"orientation_dispersion={fused['orientation_dispersion_deg']:.2f} deg, "
@@ -870,7 +938,7 @@ def infer_graspnet_fused_world_pose(
     return fused
 
 
-def infer_graspnet_world_pose(
+def infer_anygrasp_world_pose(
     stage,
     camera,
     target_prim,
@@ -878,7 +946,7 @@ def infer_graspnet_world_pose(
     apply_calibration=True,
 ):
     """Backward-compatible single-frame API for diagnostics."""
-    result = infer_graspnet_fused_world_pose(
+    result = infer_anygrasp_fused_world_pose(
         stage,
         camera,
         target_prim,
