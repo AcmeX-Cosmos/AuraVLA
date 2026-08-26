@@ -1,0 +1,15 @@
+joint_limits:
+  proximal_pitch_L_Joint: {has_velocity_limits: true, max_velocity: 2.0, has_acceleration_limits: true, max_acceleration: 3.0}
+  proximal_roll_L_Joint: {has_velocity_limits: true, max_velocity: 2.0, has_acceleration_limits: true, max_acceleration: 3.0}
+  proximal_yaw_L_Joint: {has_velocity_limits: true, max_velocity: 2.0, has_acceleration_limits: true, max_acceleration: 3.0}
+  elbow_L_Joint: {has_velocity_limits: true, max_velocity: 2.0, has_acceleration_limits: true, max_acceleration: 3.0}
+  wrist_yaw_L_Joint: {has_velocity_limits: true, max_velocity: 3.0, has_acceleration_limits: true, max_acceleration: 4.0}
+  wrist_pitch_L_Joint: {has_velocity_limits: true, max_velocity: 3.0, has_acceleration_limits: true, max_acceleration: 4.0}
+  wrist_roll_L_Joint: {has_velocity_limits: true, max_velocity: 3.0, has_acceleration_limits: true, max_acceleration: 4.0}
+  proximal_pitch_R_Joint: {has_velocity_limits: true, max_velocity: 2.0, has_acceleration_limits: true, max_acceleration: 3.0}
+  proximal_roll_R_Joint: {has_velocity_limits: true, max_velocity: 2.0, has_acceleration_limits: true, max_acceleration: 3.0}
+  proximal_yaw_R_Joint: {has_velocity_limits: true, max_velocity: 2.0, has_acceleration_limits: true, max_acceleration: 3.0}
+  elbow_R_Joint: {has_velocity_limits: true, max_velocity: 2.0, has_acceleration_limits: true, max_acceleration: 3.0}
+  wrist_yaw_R_Joint: {has_velocity_limits: true, max_velocity: 3.0, has_acceleration_limits: true, max_acceleration: 4.0}
+  wrist_pitch_R_Joint: {has_velocity_limits: true, max_velocity: 3.0, has_acceleration_limits: true, max_acceleration: 4.0}
+  wrist_roll_R_Joint: {has_velocity_limits: true, max_velocity: 3.0, has_acceleration_limits: true, max_acceleration: 4.0}

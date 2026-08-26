@@ -53,7 +53,16 @@ def generate_launch_description():
         default_value="true",
         description="Start the Foxglove WebSocket bridge on port 8765",
     )
+    start_moveit = DeclareLaunchArgument(
+        "start_moveit",
+        default_value="false",
+        description="Start MoveIt 2 plan-only backend (requires MoveIt 2 installed)",
+    )
     source_root = LaunchConfiguration("project_root")
+    try:
+        moveit_share = get_package_share_directory("aura_moveit_config")
+    except Exception:
+        moveit_share = os.path.join(project_root, "aura_moveit_config")
     isaac_script = PathJoinSubstitution([
         source_root, "aura_scripts", "start_isaac_robot.sh"
     ])
@@ -65,6 +74,16 @@ def generate_launch_description():
             "config_file": LaunchConfiguration("config_file"),
         }.items(),
         condition=IfCondition(LaunchConfiguration("start_ros_system")),
+    )
+    moveit_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                moveit_share,
+                "launch",
+                "moveit.launch.py",
+            )
+        ),
+        condition=IfCondition(LaunchConfiguration("start_moveit")),
     )
 
     isaac_runtime = ExecuteProcess(
@@ -93,7 +112,9 @@ def generate_launch_description():
         start_ros_system,
         start_isaac,
         start_foxglove,
+        start_moveit,
         system_launch,
+        moveit_launch,
         isaac_runtime,
         TimerAction(period=1.0, actions=[foxglove_bridge]),
     ])

@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<robot name="dach_tron2a">
+  <virtual_joint name="world_joint" type="fixed" parent_frame="world" child_link="base_Link" />
+
+  <group name="left_arm">
+    <chain base_link="base_Link" tip_link="tcp_L_Link" />
+  </group>
+  <group name="right_arm">
+    <chain base_link="base_Link" tip_link="tcp_R_Link" />
+  </group>
+  <group name="both_arms">
+    <group name="left_arm" />
+    <group name="right_arm" />
+  </group>
+
+  <!-- The jaw mechanism is controlled by DACHTron2AGripper in Isaac Sim.
+       These groups are descriptive and are intentionally excluded from the
+       MoveIt arm trajectory sent back to the simulator. -->
+  <group name="left_gripper">
+    <joint name="grasper_L_jaw_left_Joint" />
+    <joint name="grasper_L_jaw_right_Joint" />
+  </group>
+  <group name="right_gripper">
+    <joint name="grasper_R_jaw_left_Joint" />
+    <joint name="grasper_R_jaw_right_Joint" />
+  </group>
+
+  <end_effector name="left_gripper_eef" parent_link="tcp_L_Link" group="left_gripper" />
+  <end_effector name="right_gripper_eef" parent_link="tcp_R_Link" group="right_gripper" />
+
+  <!-- Keep the fixed structural links out of self-collision checks. -->
+  <disable_collisions link1="base_Link" link2="limx_imu" reason="Adjacent" />
+  <disable_collisions link1="wrist_roll_L_Link" link2="tcp_L_Link" reason="Adjacent" />
+  <disable_collisions link1="wrist_roll_R_Link" link2="tcp_R_Link" reason="Adjacent" />
+</robot>

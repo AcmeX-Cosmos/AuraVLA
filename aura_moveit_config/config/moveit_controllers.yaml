@@ -1,0 +1,7 @@
+moveit_controller_manager: moveit_simple_controller_manager/MoveItSimpleControllerManager
+moveit_simple_controller_manager:
+  controller_names: []
+
+# AuraVLA executes the returned trajectory through the Isaac articulation.
+# MoveIt is used in plan-only mode and must not send commands to a fake
+# controller or bind an object to the gripper.

@@ -53,6 +53,7 @@ def _load_aura_runtime_config() -> None:
         print(f"⚠️ 无法加载 AuraVLA config.yaml，使用环境变量/默认值: {exc}")
         return
     robot = settings.get("robot") or {}
+    planner = settings.get("planner") or {}
     camera = settings.get("camera") or {}
     perception = settings.get("perception") or {}
     calibration = perception.get("anygrasp_calibration") or {}
@@ -81,6 +82,10 @@ def _load_aura_runtime_config() -> None:
     set_value("AURA_ANYGRASP_FUSION_MIN_CONFIDENCE", fusion.get("min_confidence", 0.03))
     set_value("AURA_BASKET_RESET_POSITION_JSON", json.dumps(basket.get("reset_position")))
     set_value("AURA_BASKET_RESET_ORIENTATION_JSON", json.dumps(basket.get("reset_orientation")))
+    set_value("AURA_PLANNER_BACKEND", planner.get("backend", "moveit"))
+    set_value("AURA_MOVEIT_FALLBACK_TO_LULA", str(bool(planner.get("fallback_to_lula", True))).lower())
+    set_value("AURA_MOVEIT_REQUEST_DIRECTORY", planner.get("request_directory", "/tmp/aura-vla-control"))
+    set_value("AURA_MOVEIT_PLANNING_TIMEOUT_SEC", planner.get("planning_timeout_sec", 5.0))
 
     # The VS Code executor is a long-lived process. Reapply every value present
     # in Aura config so a hot reload cannot retain stale grasp physics from an
@@ -164,6 +169,7 @@ from aura_isaac_bridge.robot.dach_tron2a import (
     LEFT_ARM_HOME,
     RIGHT_ARM_HOME,
 )
+from aura_isaac_bridge.robot.moveit_backend import write_moveit_collision_scene
 from aura_isaac_bridge.robot.motion_planner import (
     DiffusionConfig,
     SparseKeyposeDiffuser,
@@ -652,6 +658,18 @@ if state.controller.rrt is not None:
         color=np.array([0.0, 0.0, 0.0]),
     )
     UsdGeom.Imageable(stage.GetPrimAtPath(planning_proxy_path)).MakeInvisible()
+    write_moveit_collision_scene(
+        [{
+            "id": "aura_table",
+            "frame_id": "world",
+            "center": planning_table_center.tolist(),
+            "size": np.maximum(planning_table_max - planning_table_min, 1e-3).tolist(),
+        }],
+        request_directory=os.environ.get(
+            "AURA_MOVEIT_REQUEST_DIRECTORY", "/tmp/aura-vla-control"
+        ),
+    )
+    print("✅ MoveIt 2 planning scene 已同步 Isaac 桌面碰撞代理")
     if state.controller.add_rrt_obstacle(state.planning_table_obstacle, static=True):
         print(
             "✅ DACH Lula RRT 已启用桌面碰撞障碍: "

@@ -4,7 +4,7 @@ setup(
     name='aura_isaac_bridge',
     version='1.0.0',
     packages=[],
-    py_modules=['isaac_bridge_node', 'isaac_runtime'],
+    py_modules=['isaac_bridge_node', 'isaac_runtime', 'moveit_file_planner_node'],
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/aura_isaac_bridge']),
         ('share/aura_isaac_bridge', ['package.xml']),
@@ -18,6 +18,7 @@ setup(
     entry_points={
         'console_scripts': [
             'isaac_bridge_node = isaac_bridge_node:main',
+            'moveit_file_planner_node = moveit_file_planner_node:main',
         ],
     },
 )

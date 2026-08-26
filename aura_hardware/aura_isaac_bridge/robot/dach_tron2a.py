@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +13,11 @@ from isaacsim.robot_motion.motion_generation.articulation_kinematics_solver impo
 )
 from isaacsim.robot_motion.motion_generation.lula.kinematics import LulaKinematicsSolver
 from isaacsim.robot_motion.motion_generation.lula.path_planners import RRT
+
+from aura_isaac_bridge.robot.moveit_backend import (
+    MoveItFilePlanner,
+    MoveItPlanningError,
+)
 
 
 LEFT_ARM_JOINT_NAMES = (
@@ -218,7 +224,13 @@ class DACHTron2AGripper:
 
 
 class DACHTron2AIKController:
-    """Lula IK controller that commands only the selected seven arm joints."""
+    """Arm controller with MoveIt 2 planning and Lula compatibility fallback.
+
+    Lula remains the local FK/IK implementation needed by Isaac Sim.  When
+    ``AURA_PLANNER_BACKEND=moveit`` the pose path is planned by the external
+    MoveIt 2 node; the returned seven-joint path is still executed by this
+    controller and never contains gripper joints.
+    """
 
     def __init__(
         self,
@@ -228,9 +240,26 @@ class DACHTron2AIKController:
         end_effector_frame: str | None = None,
         rrt_config_path: str | Path | None = None,
         max_joint_step: float = 0.035,
+        planner_backend: str | None = None,
     ) -> None:
         self.robot = robot
         self.max_joint_step = float(max_joint_step)
+        self.planner_backend = str(
+            planner_backend or os.environ.get("AURA_PLANNER_BACKEND", "moveit")
+        ).strip().lower()
+        self.moveit_fallback = os.environ.get(
+            "AURA_MOVEIT_FALLBACK_TO_LULA", "true"
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        self.moveit = None
+        if self.planner_backend in {"moveit", "auto"}:
+            self.moveit = MoveItFilePlanner(
+                request_directory=os.environ.get(
+                    "AURA_MOVEIT_REQUEST_DIRECTORY", "/tmp/aura-vla-control"
+                ),
+                timeout_sec=float(
+                    os.environ.get("AURA_MOVEIT_PLANNING_TIMEOUT_SEC", "5.0")
+                ),
+            )
         self.lula = LulaKinematicsSolver(
             robot_description_path=str(Path(robot_description_path).resolve()),
             urdf_path=str(Path(urdf_path).resolve()),
@@ -257,6 +286,39 @@ class DACHTron2AIKController:
                 print(f"DACH Lula RRT unavailable, using IK fallback: {exc}")
         self.last_ik_success = False
         self.reset()
+
+    def _moveit_pose_path(
+        self,
+        points,
+        *,
+        target_orientation=None,
+        orientations=None,
+        warm_start=None,
+    ) -> list[np.ndarray] | None:
+        if self.moveit is None:
+            return None
+        try:
+            start = self._valid_ik_seed(
+                self.get_active_joint_positions() if warm_start is None else warm_start
+            )
+            return self.moveit.plan_pose_waypoints(
+                group_name=f"{self.robot.arm_side}_arm",
+                end_effector_link=self.robot.end_effector_frame,
+                waypoints=points,
+                target_orientation=target_orientation,
+                orientations=orientations,
+                start_joint_positions=start,
+                joint_names=self.robot.arm_joint_names,
+            )
+        except (MoveItPlanningError, OSError, ValueError) as exc:
+            print(
+                f"⚠️ MoveIt 2 {self.robot.arm_side} arm planning unavailable: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            if not self.moveit_fallback:
+                raise
+            print(f"↩️ {self.robot.arm_side} arm falling back to Lula planning")
+            return None
 
     def reset(self) -> None:
         position, orientation = self.robot.get_world_pose()
@@ -299,6 +361,13 @@ class DACHTron2AIKController:
         target_orientation=None,
         start_joint_positions=None,
     ) -> list[np.ndarray] | None:
+        moveit_path = self._moveit_pose_path(
+            [np.asarray(target_position, dtype=float)],
+            target_orientation=target_orientation,
+            warm_start=start_joint_positions,
+        )
+        if moveit_path is not None:
+            return moveit_path
         if self.rrt is None:
             return None
         self.reset()
@@ -413,6 +482,16 @@ class DACHTron2AIKController:
         if not points:
             self.last_pose_waypoint_diagnostics["success"] = True
             return []
+        moveit_path = self._moveit_pose_path(
+            points,
+            target_orientation=target_orientation,
+            warm_start=warm_start,
+        )
+        if moveit_path is not None:
+            self.last_pose_waypoint_diagnostics.update(
+                {"success": True, "planner": "moveit_2"}
+            )
+            return moveit_path
         self.reset()
         if warm_start is None:
             warm_start = self.get_active_joint_positions()
@@ -479,6 +558,13 @@ class DACHTron2AIKController:
             raise ValueError("waypoints and orientations must have equal length")
         if not points:
             return []
+        moveit_path = self._moveit_pose_path(
+            points,
+            orientations=quaternions,
+            warm_start=warm_start,
+        )
+        if moveit_path is not None:
+            return moveit_path
         self.reset()
         if warm_start is None:
             warm_start = self.get_active_joint_positions()

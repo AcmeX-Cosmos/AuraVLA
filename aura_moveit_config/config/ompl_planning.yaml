@@ -1,0 +1,19 @@
+planner_configs:
+  RRTConnectkConfigDefault:
+    type: geometric::RRTConnect
+    range: 0.0
+  RRTstarkConfigDefault:
+    type: geometric::RRTstar
+    range: 0.0
+
+left_arm:
+  planner_configs: [RRTConnectkConfigDefault, RRTstarkConfigDefault]
+  longest_valid_segment_fraction: 0.005
+  projection_evaluator: joints(proximal_pitch_L_Joint,elbow_L_Joint,wrist_pitch_L_Joint)
+right_arm:
+  planner_configs: [RRTConnectkConfigDefault, RRTstarkConfigDefault]
+  longest_valid_segment_fraction: 0.005
+  projection_evaluator: joints(proximal_pitch_R_Joint,elbow_R_Joint,wrist_pitch_R_Joint)
+both_arms:
+  planner_configs: [RRTConnectkConfigDefault]
+  longest_valid_segment_fraction: 0.005

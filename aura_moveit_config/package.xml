@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>aura_moveit_config</name>
+  <version>1.0.0</version>
+  <description>MoveIt 2 planning configuration for the AuraVLA DACH TRON2A robot</description>
+  <maintainer email="AcmeX@foxmail.com">AuraVLA Team</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>moveit_ros_move_group</exec_depend>
+  <exec_depend>moveit_msgs</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>aura_robot_description</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

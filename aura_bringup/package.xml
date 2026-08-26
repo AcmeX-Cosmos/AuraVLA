@@ -16,6 +16,7 @@
   <exec_depend>aura_verification</exec_depend>
   <exec_depend>aura_orchestration</exec_depend>
   <exec_depend>aura_isaac_bridge</exec_depend>
+  <exec_depend>aura_moveit_config</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

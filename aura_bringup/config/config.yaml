@@ -20,6 +20,14 @@ nvidia:
   frequency_penalty: 0.0
   presence_penalty: 0.0
 
+planner:
+  # MoveIt 2 owns collision-aware arm planning.  Lula remains the explicit
+  # compatibility fallback until MoveIt is installed and started.
+  backend: "moveit"
+  fallback_to_lula: true
+  request_directory: "/tmp/aura-vla-control"
+  planning_timeout_sec: 5.0
+
 agent:
   image_max_edge: 448
   max_history_messages: 2
