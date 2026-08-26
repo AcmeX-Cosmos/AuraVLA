@@ -3,11 +3,11 @@ nvidia:
   # Add up to three independent NVIDIA keys here. When non-empty, the agent
   # sends one copy of each request concurrently and keeps the first valid JSON.
   # Prefer environment variables for keys in shared repositories.
-  api_keys: ["Bearer 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",
-             "Bearer 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",
-             "Bearer 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"]
+  api_keys: ["Bearer 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",
+             "Bearer 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",
+             "Bearer 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"]
 
-  model: "nvidia/nemotron-nano-12b-v2-vl"
+  model: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
   base_url: "https://integrate.api.nvidia.com/v1"
   request_timeout_sec: 300
   parallel_request_timeout_sec: 20

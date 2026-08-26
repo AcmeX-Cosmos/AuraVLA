@@ -29,6 +29,22 @@ class RecordingBackend:
 
 
 class NvidiaVLAgentRoutingTest(unittest.TestCase):
+    def test_scalar_target_object_is_normalized_to_list(self):
+        backend = RecordingBackend(
+            {
+                "schema_version": "1.0",
+                "doable": True,
+                "task": "pick_and_place",
+                "target_objects": "banana",
+                "target_container": "basket",
+            }
+        )
+        agent = NvidiaVLAgent(backend=backend)
+
+        response = json.loads(agent.infer("把香蕉放进篮子里", None))
+
+        self.assertEqual(response["target_objects"], ["banana"])
+
     def test_exact_configured_task_still_uses_backend(self):
         backend = RecordingBackend(
             {

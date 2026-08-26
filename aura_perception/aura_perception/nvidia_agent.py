@@ -1347,6 +1347,12 @@ def _normalize_scene_task_names(
         if field in response:
             response[field] = resolver.canonicalize(response[field])
     target_objects = response.get("target_objects")
+    # Some multimodal models emit a scalar for the common single-object case
+    # even though the task contract requires an array. Normalize only this
+    # unambiguous form; other invalid types remain schema errors.
+    if isinstance(target_objects, str) and target_objects.strip():
+        target_objects = [target_objects]
+        response["target_objects"] = target_objects
     if isinstance(target_objects, list):
         normalized_objects = []
         seen_objects = set()
