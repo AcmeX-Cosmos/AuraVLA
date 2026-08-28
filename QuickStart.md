@@ -97,6 +97,30 @@ aura_hardware/aura_isaac_bridge/thirdparty/anygrasp/checkpoint_detection.tar
 模型路径可在 `aura_bringup/config/config.yaml` 的 `perception.anygrasp`
 中覆盖。没有有效许可证或 checkpoint 时，任务会返回 `ANYGRASP_UNAVAILABLE`。
 
+### 获取当前机器许可证 ID
+
+使用 Isaac Sim Python 运行下面的脚本。脚本严格按 AnyGrasp 官方流程选择当前
+Python ABI 对应的 `gsnet` 二进制，复制到 `license_registration/gsnet.so`，并
+打印 feature ID；不会读取或修改任何许可证文件。必须在宿主机终端执行，不能
+在沙箱、容器或受限网络环境中执行。
+
+```bash
+cd /home/acmex/Code/learning/courses/AuraVLA
+/home/acmex/Code/learning/isaacsim/python.sh \
+  aura_scripts/get_anygrasp_feature_id.py
+```
+
+将输出的 `feature_id=N...` 值填入官方申请表。需要显式使用其他 Isaac Python
+路径时可执行：
+
+```bash
+python3 aura_scripts/get_anygrasp_feature_id.py \
+  --runtime-python /home/acmex/Code/learning/isaacsim/python.sh
+```
+
+不要使用 conda Python；注册和实际 AnyGrasp 推理必须使用同一 Isaac Python
+运行时，并在同一宿主机网络环境执行。
+
 AnyGrasp 还需要与 Isaac Python/PyTorch CUDA 版本匹配的 MinkowskiEngine。
 如果运行时提示缺少该依赖，先安装 CUDA Toolkit（必须包含 `nvcc`），再执行：
 
