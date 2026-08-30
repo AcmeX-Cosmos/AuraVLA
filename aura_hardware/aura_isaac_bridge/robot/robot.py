@@ -56,8 +56,10 @@ def _load_aura_runtime_config() -> None:
     planner = settings.get("planner") or {}
     camera = settings.get("camera") or {}
     perception = settings.get("perception") or {}
-    calibration = perception.get("anygrasp_calibration") or {}
+    grasp_backend = str(perception.get("grasp_backend", "anygrasp")).strip().lower()
+    anygrasp_calibration = perception.get("anygrasp_calibration") or {}
     anygrasp = perception.get("anygrasp") or {}
+    graspnet_calibration = perception.get("graspnet_calibration") or {}
     scene = settings.get("scene") or {}
     basket = ((scene.get("objects") or {}).get("basket") or {})
 
@@ -66,13 +68,15 @@ def _load_aura_runtime_config() -> None:
             os.environ[env_name] = str(value)
 
     set_value("AURA_CAMERA_PRIM_PATH", camera.get("prim_path"))
+    if "AURA_GRASP_BACKEND" not in os.environ:
+        set_value("AURA_GRASP_BACKEND", grasp_backend)
     set_value("AURA_DACH_ARM_SIDE", str(robot.get("arm_side", "right")).lower())
     set_value("AURA_DACH_BASE_XY_JSON", json.dumps(robot.get("base_xy")))
     set_value("ANYGRASP_DIR", anygrasp.get("sdk_dir"))
     set_value("ANYGRASP_CHECKPOINT_PATH", anygrasp.get("checkpoint_path"))
-    set_value("AURA_ANYGRASP_CALIBRATION_ENABLED", str(bool(calibration.get("enabled", False))).lower())
-    set_value("AURA_ANYGRASP_CAMERA_OFFSET_JSON", json.dumps(calibration.get("camera_offset_m", [0.0, 0.0, 0.0])))
-    set_value("AURA_ANYGRASP_CALIBRATION_MAX_CORRECTION_M", calibration.get("max_correction_m", 0.06))
+    set_value("AURA_ANYGRASP_CALIBRATION_ENABLED", str(bool(anygrasp_calibration.get("enabled", False))).lower())
+    set_value("AURA_ANYGRASP_CAMERA_OFFSET_JSON", json.dumps(anygrasp_calibration.get("camera_offset_m", [0.0, 0.0, 0.0])))
+    set_value("AURA_ANYGRASP_CALIBRATION_MAX_CORRECTION_M", anygrasp_calibration.get("max_correction_m", 0.06))
     fusion = perception.get("anygrasp_fusion") or {}
     set_value("AURA_ANYGRASP_FUSION_FRAME_COUNT", fusion.get("frame_count", 3))
     set_value("AURA_ANYGRASP_FUSION_FRAME_INTERVAL_SEC", fusion.get("frame_interval_sec", 0.12))
@@ -80,6 +84,19 @@ def _load_aura_runtime_config() -> None:
     set_value("AURA_ANYGRASP_FUSION_MAX_ORIENTATION_DISPERSION_DEG", fusion.get("max_orientation_dispersion_deg", 25.0))
     set_value("AURA_ANYGRASP_FUSION_POSITION_OUTLIER_FLOOR_M", fusion.get("position_outlier_floor_m", 0.012))
     set_value("AURA_ANYGRASP_FUSION_MIN_CONFIDENCE", fusion.get("min_confidence", 0.03))
+    graspnet = perception.get("graspnet") or {}
+    set_value("GRASPNET_BASELINE_DIR", graspnet.get("baseline_dir"))
+    set_value("GRASPNET_CHECKPOINT_PATH", graspnet.get("checkpoint_path"))
+    set_value("AURA_GRASPNET_CALIBRATION_ENABLED", str(bool(graspnet_calibration.get("enabled", False))).lower())
+    set_value("AURA_GRASPNET_CAMERA_OFFSET_JSON", json.dumps(graspnet_calibration.get("camera_offset_m", [0.0, 0.0, 0.0])))
+    set_value("AURA_GRASPNET_CALIBRATION_MAX_CORRECTION_M", graspnet_calibration.get("max_correction_m", 0.06))
+    graspnet_fusion = perception.get("graspnet_fusion") or {}
+    set_value("AURA_GRASPNET_FUSION_FRAME_COUNT", graspnet_fusion.get("frame_count", 3))
+    set_value("AURA_GRASPNET_FUSION_FRAME_INTERVAL_SEC", graspnet_fusion.get("frame_interval_sec", 0.12))
+    set_value("AURA_GRASPNET_FUSION_MAX_POSITION_DISPERSION_M", graspnet_fusion.get("max_position_dispersion_m", 0.025))
+    set_value("AURA_GRASPNET_FUSION_MAX_ORIENTATION_DISPERSION_DEG", graspnet_fusion.get("max_orientation_dispersion_deg", 25.0))
+    set_value("AURA_GRASPNET_FUSION_POSITION_OUTLIER_FLOOR_M", graspnet_fusion.get("position_outlier_floor_m", 0.012))
+    set_value("AURA_GRASPNET_FUSION_MIN_CONFIDENCE", graspnet_fusion.get("min_confidence", 0.10))
     set_value("AURA_BASKET_RESET_POSITION_JSON", json.dumps(basket.get("reset_position")))
     set_value("AURA_BASKET_RESET_ORIENTATION_JSON", json.dumps(basket.get("reset_orientation")))
     set_value("AURA_PLANNER_BACKEND", planner.get("backend", "moveit"))
@@ -149,12 +166,15 @@ def _load_aura_runtime_config() -> None:
         "AURA_CARRY_APEX_CLEARANCE": ("carry_apex_clearance_m", 0.15),
         "AURA_DUAL_ARM_MIN_TCP_SEPARATION": ("dual_arm_min_tcp_separation_m", 0.18),
         "AURA_ANYGRASP_REQUIRED": ("anygrasp_required", True),
+        "AURA_GRASPNET_REQUIRED": ("graspnet_required", False),
     }
     for env_name, (key, default) in config_env.items():
         if key in robot:
             set_value(env_name, robot.get(key, default))
-    set_value("AURA_USE_ANYGRASP", str(bool(robot.get("use_anygrasp", True))).lower())
+    set_value("AURA_USE_ANYGRASP", str(bool(robot.get("use_anygrasp", anygrasp.get("enabled", True)))).lower())
     set_value("AURA_USE_ANYGRASP_ORIENTATION", str(bool(robot.get("use_anygrasp_orientation", False))).lower())
+    set_value("AURA_USE_GRASPNET", str(bool(robot.get("use_graspnet", graspnet.get("enabled", False)))).lower())
+    set_value("AURA_USE_GRASPNET_ORIENTATION", str(bool(robot.get("use_graspnet_orientation", False))).lower())
     set_value("AURA_PHYSX_ENABLE_CCD", str(bool(robot.get("physx_enable_ccd", False))).lower())
     set_value("AURA_PHYSX_CONVEX_SHRINK_WRAP", str(bool(robot.get("physx_convex_shrink_wrap", True))).lower())
     set_value("AURA_SCENE_OBJECTS_JSON", json.dumps(scene.get("objects") or {}, ensure_ascii=False))
@@ -185,8 +205,11 @@ from aura_isaac_bridge.core.state import (
     DEFAULT_PROJECT_ROOT, DEFAULT_ISAAC_SIM_ROOT, DEFAULT_ISAAC_SITE_PACKAGES,
     ANYGRASP_DIR, ANYGRASP_CHECKPOINT_PATH, SAM_MODEL_PATH,
     DEFAULT_ANYGRASP_DIR, DEFAULT_SAM_MODEL_PATH,
+    GRASPNET_DIR, GRASPNET_CHECKPOINT_PATH,
+    GRASP_BACKEND,
     CAMERA_PRIM_PATH, CAMERA_RESOLUTION, CAMERA_PREVIEW_RESOLUTION,
     SHOW_GRASP_DEBUG, USE_ANYGRASP, USE_ANYGRASP_ORIENTATION,
+    USE_GRASPNET, USE_GRASPNET_ORIENTATION,
     ANYGRASP_FUSION_FRAME_COUNT, ANYGRASP_FUSION_FRAME_INTERVAL_SEC,
     ANYGRASP_FUSION_MAX_POSITION_DISPERSION_M,
     ANYGRASP_FUSION_MAX_ORIENTATION_DISPERSION_DEG,
@@ -247,6 +270,7 @@ from aura_isaac_bridge.core.perception import (
     get_current_object_center, create_sam_prompt_points,
     segment_target_with_sam,
     ensure_anygrasp_python_dependencies, load_anygrasp_model,
+    ensure_graspnet_python_dependencies, load_graspnet_demo,
     release_cuda_inference_cache, infer_anygrasp_world_pose,
     resolve_scene_prim_path,
 )
@@ -305,6 +329,7 @@ SCENE_NAME_RESOLVER = state.SCENE_NAME_RESOLVER
 print("=== 开始执行脚本 ===")
 print(f"📁 AuraVLA 项目目录: {PROJECT_ROOT}")
 print(f"📁 AnyGrasp SDK 目录: {ANYGRASP_DIR}")
+print(f"🧠 抓取感知后端: {GRASP_BACKEND}")
 
 # ── 1. SimulationContext ──────────────────────────────────────────
 print(f"📁 AnyGrasp SDK 目录: {ANYGRASP_DIR}")

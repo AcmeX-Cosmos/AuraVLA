@@ -76,7 +76,7 @@ Isaac camera: /tmp/aura-vla-camera
 
 ## 4. AnyGrasp 运行要求
 
-AuraVLA 当前强制使用 AnyGrasp 生成抓取点。AnyGrasp SDK、Python 依赖和
+AuraVLA 默认使用 AnyGrasp 生成抓取点。AnyGrasp SDK、Python 依赖和
 官方 checkpoint 必须存在于 `aura_hardware/aura_isaac_bridge/thirdparty/anygrasp/`；模型不可用时任务会安全终止，
 不会回退到场景几何抓取。
 
@@ -128,7 +128,32 @@ AnyGrasp 还需要与 Isaac Python/PyTorch CUDA 版本匹配的 MinkowskiEngine�
 bash aura_hardware/aura_isaac_bridge/thirdparty/anygrasp/install_minkowski_engine.sh
 ```
 
-## 5. 快捷指令
+## 5. 抓取后端切换
+
+项目保留两个独立的抓取感知接口，默认使用 AnyGrasp。两者都经过同一套
+RGB-D/SAM 分割、世界坐标转换、多帧加权融合、IK/RRT 规划和物理抓取验证；
+不会使用 FixedJoint 或其他物体绑定方式伪造抓取成功。
+
+在 `aura_bringup/config/config.yaml` 中切换默认后端：
+
+```yaml
+perception:
+  grasp_backend: "anygrasp"  # 或 "graspnet"
+```
+
+也可以只对当前 Isaac runtime 进程切换，环境变量优先于 YAML：
+
+```bash
+AURA_GRASP_BACKEND=graspnet ./aura_scripts/start_isaac_robot.sh
+```
+
+GraspNet baseline 默认读取 `/home/acmex/Code/learning/isaac_assets/thirdparty/graspnet-baseline`，
+权重为其中的 `checkpoint-rs.tar`。如路径不同，设置
+`GRASPNET_BASELINE_DIR` 和 `GRASPNET_CHECKPOINT_PATH`。GraspNet 不需要 AnyGrasp
+许可证；任一后端的依赖、权重或许可证不可用时，任务会返回对应的
+`ANYGRASP_UNAVAILABLE` 或 `GRASPNET_UNAVAILABLE`，不会静默回退到几何中心。
+
+## 6. 快捷指令
 
 在 NVIDIA Agent 的 `you>` 提示符输入：
 
@@ -159,7 +184,8 @@ ros2 topic echo /aura/transport_tracking std_msgs/msg/String
 ```
 
 该话题会先发布 bridge 的 `waiting_for_event` 心跳；任务进入运输阶段后，
-发布 AnyGrasp 运输校验、物体偏差、重规划请求以及重规划结果。
+发布当前抓取后端的运输校验、物体偏差、重规划请求以及重规划结果。为保持
+Foxglove 兼容，ROS 话题名仍使用历史前缀 `/aura/anygrasp`。
 
 Foxglove Plot 可直接使用以下标准话题：
 

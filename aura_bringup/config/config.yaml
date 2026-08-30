@@ -66,6 +66,9 @@ camera:
   refresh_timeout_sec: 15
 
 perception:
+  # Select exactly one grasp detector per task. Override with
+  # AURA_GRASP_BACKEND=anygrasp|graspnet for a temporary process-level switch.
+  grasp_backend: "anygrasp"
   anygrasp:
     enabled: true
     sdk_dir: "/home/acmex/Code/learning/courses/AuraVLA/aura_hardware/aura_isaac_bridge/thirdparty/anygrasp/sdk"
@@ -85,6 +88,21 @@ perception:
     # probability. Temporal fusion still enforces depth, geometry, and
     # dispersion gates before accepting a grasp.
     min_confidence: 0.03
+  graspnet:
+    enabled: true
+    baseline_dir: "/home/acmex/Code/learning/isaac_assets/thirdparty/graspnet-baseline"
+    checkpoint_path: "/home/acmex/Code/learning/isaac_assets/thirdparty/graspnet-baseline/checkpoint-rs.tar"
+  graspnet_calibration:
+    enabled: false
+    camera_offset_m: [0.0, 0.0, 0.0]
+    max_correction_m: 0.06
+  graspnet_fusion:
+    frame_count: 3
+    frame_interval_sec: 0.12
+    max_position_dispersion_m: 0.025
+    max_orientation_dispersion_deg: 25.0
+    position_outlier_floor_m: 0.012
+    min_confidence: 0.10
 
 execution:
   enabled: true

@@ -1,4 +1,4 @@
-"""Pure AnyGrasp temporal fusion utilities.
+"""Pure temporal fusion utilities shared by the grasp backends.
 
 This module deliberately has no Isaac Sim, ROS 2, Torch, or VLM dependency.
 It keeps perception fusion deterministic and unit-testable outside the Isaac
@@ -20,7 +20,7 @@ class GraspFusionError(RuntimeError):
 
 @dataclass(frozen=True)
 class GraspObservation:
-    """One calibrated AnyGrasp result in the robot/world coordinate frame."""
+    """One calibrated detector result in the robot/world coordinate frame."""
 
     position: np.ndarray
     orientation: np.ndarray
@@ -104,18 +104,18 @@ def fuse_grasp_observations(
     position_outlier_floor_m: float = 0.012,
     min_confidence: float = 0.03,
 ) -> dict:
-    """Fuse stable AnyGrasp observations and reject temporal outliers.
+    """Fuse stable grasp observations and reject temporal outliers.
 
     Position outliers are rejected using a coordinate-wise median/MAD gate.
     The remaining observations are weighted by model score, valid depth, and
-    geometric validity. AnyGrasp's score is a ranking score rather than a
+    geometric validity. Detector scores are ranking scores rather than a
     calibrated probability, so the threshold is intentionally calibrated to
     the observed SDK score range. Quaternion signs are aligned before the
     Markley mean.
     """
     values = _normalise_observations(observations)
     if not values:
-        raise GraspFusionError("no valid AnyGrasp observations")
+        raise GraspFusionError("no valid grasp observations")
 
     positions = np.asarray([item.position for item in values], dtype=float)
     median = np.median(positions, axis=0)
@@ -124,7 +124,7 @@ def fuse_grasp_observations(
     gate = max(float(position_outlier_floor_m), 3.0 * max(mad, 1e-6))
     inliers = distances <= gate
     if not np.any(inliers):
-        raise GraspFusionError("all AnyGrasp observations rejected as temporal outliers")
+        raise GraspFusionError("all grasp observations rejected as temporal outliers")
 
     candidates = [item for item, keep in zip(values, inliers) if keep]
     candidate_distances = distances[inliers]
@@ -132,7 +132,7 @@ def fuse_grasp_observations(
     consistency_scale = max(gate, 1e-6)
     weights *= np.exp(-np.square(candidate_distances / consistency_scale))
     if not np.any(weights > 0.0):
-        raise GraspFusionError("AnyGrasp fusion weights are invalid")
+        raise GraspFusionError("grasp fusion weights are invalid")
     weights /= np.sum(weights)
 
     fused_position = np.sum(
@@ -171,16 +171,16 @@ def fuse_grasp_observations(
 
     if position_std > float(max_position_dispersion_m):
         raise GraspFusionError(
-            f"AnyGrasp position dispersion is too high: {position_std:.4f} m"
+            f"grasp position dispersion is too high: {position_std:.4f} m"
         )
     if orientation_dispersion > float(max_orientation_dispersion_deg):
         raise GraspFusionError(
-            "AnyGrasp orientation dispersion is too high: "
+            "grasp orientation dispersion is too high: "
             f"{orientation_dispersion:.2f} deg"
         )
     if confidence < float(min_confidence):
         raise GraspFusionError(
-            f"AnyGrasp fused confidence is too low: {confidence:.3f}"
+            f"grasp fused confidence is too low: {confidence:.3f}"
         )
 
     return {
