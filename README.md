@@ -19,14 +19,21 @@
 
 ## Overview
 
-AuraVLA is a embodied AI system implementing closed-loop perception-planning-execution control for robotic manipulation tasks. The system seamlessly integrates vision-language understanding with structured task planning, precise robot control, and automatic result verification.
+AuraVLA is an embodied AI system implementing closed-loop perception, planning,
+execution, and verification for robotic manipulation tasks. It combines
+NVIDIA Nemotron semantic planning, RGB-D grasp perception, ROS 2 orchestration,
+and Isaac Sim physics-based execution.
 
 **Core Technology Stack:**
 - **ROS2 Humble** - Robotics middleware
 - **Python 3.10+** - Primary implementation language
 - **NVIDIA Nemotron VLM** - Vision-language model for scene understanding
 - **Isaac Sim** - Physics simulation and robot control
+- **AnyGrasp / GraspNet** - Selectable RGB-D grasp pose estimation backends
+- **SAM** - Target object segmentation for grasp perception
+- **Lula IK / RRT and MoveIt 2** - Collision-aware motion planning
 - **Schema-based Validation** - Safe task planning with constraint checking
+- **Foxglove** - ROS 2 telemetry and grasp tracking visualization
 
 ---
 
@@ -37,12 +44,15 @@ AuraVLA is a embodied AI system implementing closed-loop perception-planning-exe
 - **Robust Robot Execution**: File-based Isaac Sim communication protocol with progress monitoring, timeout handling, and error recovery mechanisms
 - **Geometric Result Verification**: Automated task completion checking through geometric validation and spatial relationship analysis
 - **Closed-Loop Orchestration**: Self-correcting control system with automatic replanning, state machine management, and configurable retry strategies
+- **Selectable Grasp Backends**: Switch between AnyGrasp and GraspNet through `config.yaml` without changing the task execution pipeline
+- **Physics-Based Verification**: Requires real finger contact, object lift, stable transport, and verified placement; it does not use FixedJoint attachment
 
 ---
 
 ## Architecture
 
-See detailed architecture documentation in [ARCHITECTURE.md](ARCHITECTURE.md)
+See the detailed architecture documentation in
+[aura_docs/1.0-system-architecture.md](aura_docs/1.0-system-architecture.md).
 
 ---
 
@@ -56,10 +66,12 @@ See detailed architecture documentation in [ARCHITECTURE.md](ARCHITECTURE.md)
 | **Execution** | `aura_execution/aura_execution/` | Task bridge, action executor, and execution action server for Isaac Sim control |
 | **Verification** | `aura_verification/aura_verification/` | Completion checker, geometric verifier, and verification service node |
 | **Orchestration** | `aura_orchestration/aura_orchestration/` | Main orchestrator, state machine, and closed-loop coordination node |
-| **Hardware** | `aura_hardware/` | Camera bridge and Isaac Sim bridge for hardware interface abstraction |
+| **Hardware** | `aura_hardware/` | RGB-D camera bridge, Isaac Sim runtime, grasp perception, motion, and physics control |
 | **Bringup** | `aura_bringup/` | System launch files and configuration management for complete system startup |
+| **MoveIt 2** | `aura_moveit_config/` | Plan-only MoveIt 2 configuration and JSON bridge for collision-aware planning |
 | **Utils** | `aura_utils/aura_utils/` | Configuration loader, structured logger, and common utility functions |
 | **Description** | `aura_description/` | Robot URDF files, mesh resources, and kinematic configurations |
+| **Documentation** | `aura_docs/` | Architecture, runtime, and integration documentation |
 
 ---
 
@@ -131,12 +143,16 @@ AuraVLA/
 │       └── setup.py
 ├── aura_bringup/                 # System launch and configuration
 │   ├── launch/
-│   │   └── aura_system.launch.py # Complete system startup
+│   │   └── aura_bringup.launch.py # Complete system startup
 │   ├── config/
 │   │   ├── system.yaml           # Base system configuration
 │   │   ├── dev.yaml              # Development environment
 │   │   └── prod.yaml             # Production environment
 │   ├── CMakeLists.txt
+│   └── package.xml
+├── aura_moveit_config/           # Optional MoveIt 2 planning backend
+│   ├── config/                   # SRDF, kinematics, limits, and OMPL config
+│   ├── launch/                   # MoveIt 2 plan-only launch
 │   └── package.xml
 ├── aura_utils/                   # Utility libraries
 │   ├── aura_utils/
@@ -154,6 +170,9 @@ AuraVLA/
 │   └── package.xml
 ├── README.md                     # Project documentation
 ├── README_zh.md                  # Chinese documentation
+├── QuickStart.md                 # Runtime setup and operating commands
+├── aura_docs/                    # Architecture and integration documentation
+│   └── 1.0-system-architecture.md
 └── LICENSE                       # Apache 2.0 license
 ```
 
@@ -170,7 +189,8 @@ AuraVLA/
 
 ### Clone Repository
 
-See [INSTALL.md](INSTALL.md) for detailed installation instructions.
+See [QuickStart.md](QuickStart.md) for detailed runtime setup and operating
+instructions.
 
 ### Install Dependencies
 
@@ -207,12 +227,41 @@ export NVIDIA_API_KEY="your_nvidia_api_key_here"
 ### Launch System
 
 ```bash
-# Start complete AuraVLA system
-ros2 launch aura_bringup aura_system.launch.py
+# Start the complete ROS 2 system, Isaac runtime injection, and Foxglove bridge
+ros2 launch aura_bringup aura_bringup.launch.py
 
 # Launch with custom configuration
-ros2 launch aura_bringup aura_system.launch.py config_file:=/path/to/config.yaml
+ros2 launch aura_bringup aura_bringup.launch.py config_file:=/path/to/config.yaml
 ```
+
+Isaac Sim must already be running with the VS Code Edition executor enabled.
+The interactive NVIDIA Agent is intentionally started as a separate process:
+
+```bash
+./aura_scripts/start_nvidia_agent.sh
+```
+
+### Select a Grasp Backend
+
+The current configuration defaults to GraspNet and keeps AnyGrasp available as
+an alternative backend:
+
+```yaml
+perception:
+  grasp_backend: "graspnet"  # or "anygrasp"
+```
+
+The same switch can be applied to one runtime process with:
+
+```bash
+AURA_GRASP_BACKEND=graspnet ./aura_scripts/start_isaac_robot.sh
+```
+
+Both backends share RGB-D capture, SAM segmentation, camera calibration,
+temporal weighted fusion, robot-frame conversion, motion planning, and
+physics-based verification. An unavailable selected backend fails closed with
+an explicit backend-specific error instead of silently using a geometric
+center.
 
 ### Send Task Request
 

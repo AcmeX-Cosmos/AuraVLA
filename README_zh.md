@@ -42,7 +42,8 @@ AuraVLA 是一个具身AI系统，实现了机器人操作任务的闭环感知-
 
 ## 系统架构
 
-详细架构文档见 [ARCHITECTURE.md](ARCHITECTURE.md)
+详细架构文档见
+[aura_docs/1.0-system-architecture.md](aura_docs/1.0-system-architecture.md)
 
 ---
 
