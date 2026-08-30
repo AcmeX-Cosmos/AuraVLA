@@ -68,7 +68,7 @@ camera:
 perception:
   # Select exactly one grasp detector per task. Override with
   # AURA_GRASP_BACKEND=anygrasp|graspnet for a temporary process-level switch.
-  grasp_backend: "anygrasp"
+  grasp_backend: "graspnet"
   anygrasp:
     enabled: true
     sdk_dir: "/home/acmex/Code/learning/courses/AuraVLA/aura_hardware/aura_isaac_bridge/thirdparty/anygrasp/sdk"
