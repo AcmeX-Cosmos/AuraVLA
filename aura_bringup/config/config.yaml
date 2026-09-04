@@ -131,11 +131,14 @@ robot:
   grasp_clearance_guard_pad_m: 0.0005
   max_grasp_approach_tilt_deg: 15.0
   target_grasp_approach_tilt_deg: 10.0
-  # AnyGrasp is mandatory for all grasp actions. There is no scene-geometry
-  # fallback when the model or its checkpoint is unavailable.
-  anygrasp_required: true
-  use_anygrasp: true
-  use_anygrasp_orientation: true
+  # Use GraspNet first while AnyGrasp remains available as a config-selectable
+  # alternative. The active backend is selected by perception.grasp_backend.
+  anygrasp_required: false
+  use_anygrasp: false
+  use_anygrasp_orientation: false
+  graspnet_required: true
+  use_graspnet: true
+  use_graspnet_orientation: false
   gripper_close_frames: 120
   gripper_max_effort_n: 16.0
   gripper_stiffness: 500.0

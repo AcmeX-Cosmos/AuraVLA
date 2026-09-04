@@ -39,7 +39,7 @@ DACH_RIGHT_ROBOT_DESCRIPTION_PATH = AURA_DIR / "config" / "aura_dach_tron2a_righ
 DACH_LEFT_RRT_CONFIG_PATH = AURA_DIR / "config" / "aura_dach_tron2a_left_rrt.yaml"
 DACH_RIGHT_RRT_CONFIG_PATH = AURA_DIR / "config" / "aura_dach_tron2a_right_rrt.yaml"
 
-GRASP_BACKEND = os.environ.get("AURA_GRASP_BACKEND", "anygrasp").strip().lower()
+GRASP_BACKEND = os.environ.get("AURA_GRASP_BACKEND", "graspnet").strip().lower()
 if GRASP_BACKEND not in {"anygrasp", "graspnet"}:
     raise RuntimeError(
         "AURA_GRASP_BACKEND 必须是 anygrasp 或 graspnet: "
@@ -89,12 +89,12 @@ CAMERA_PREVIEW_RESOLUTION = (640, 360)
 SHOW_GRASP_DEBUG = False
 ANYGRASP_REQUIRED = os.environ.get(
     "AURA_ANYGRASP_REQUIRED",
-    "true",
+    "true" if GRASP_BACKEND == "anygrasp" else "false",
 ).strip().lower() in {"true", "1", "yes", "on"}
 USE_ANYGRASP = ANYGRASP_REQUIRED or (
     os.environ.get(
         "AURA_USE_ANYGRASP",
-        "true",
+        "true" if GRASP_BACKEND == "anygrasp" else "false",
     ).strip().lower()
     in ("true", "1", "yes", "on")
 )
@@ -103,10 +103,13 @@ USE_ANYGRASP_ORIENTATION = os.environ.get(
     "false",
 ).strip().lower() in {"1", "true", "yes", "on"}
 GRASPNET_REQUIRED = os.environ.get(
-    "AURA_GRASPNET_REQUIRED", "false"
+    "AURA_GRASPNET_REQUIRED", "true" if GRASP_BACKEND == "graspnet" else "false"
 ).strip().lower() in {"true", "1", "yes", "on"}
 USE_GRASPNET = GRASPNET_REQUIRED or (
-    os.environ.get("AURA_USE_GRASPNET", "true").strip().lower()
+    os.environ.get(
+        "AURA_USE_GRASPNET",
+        "true" if GRASP_BACKEND == "graspnet" else "false",
+    ).strip().lower()
     in {"true", "1", "yes", "on"}
 )
 USE_GRASPNET_ORIENTATION = os.environ.get(

@@ -862,25 +862,34 @@ def _evaluate_complete_task_pose_chain(
             )
             place_hover = place_tcp + np.array([0.0, 0.0, 0.22])
             place_hover[2] = max(place_hover[2], lift_tcp[2])
-            transit_points = state._diffuser.diffuse_cartesian_keyposes(
-                [lift_tcp, place_hover], max_spacing=0.06
-            )[1:]
-            descent_points = state._diffuser.diffuse_cartesian_keyposes(
-                [place_hover, place_tcp], max_spacing=0.04
-            )[1:]
-            complete_place_points = [*transit_points, *descent_points]
-            place_chain = controller.plan_pose_waypoints(
-                complete_place_points,
+            # The execution path uses a collision-aware sparse RRT for the
+            # transport corridor. Do not reject that path with a denser
+            # fixed-orientation Cartesian IK sweep: near the edge of this
+            # arm's workspace Lula can fail on an interpolated point even
+            # when both corridor endpoints and the final descent are valid.
+            hover_chain = controller.plan_pose_waypoints(
+                [place_hover],
                 target_orientation=transport_orientation,
                 warm_start=reorientation_chain[-1],
                 allow_orientation_fallback=False,
             )
+            place_chain = None
+            if hover_chain is not None:
+                place_chain = controller.plan_pose_waypoints(
+                    [place_tcp],
+                    target_orientation=transport_orientation,
+                    warm_start=hover_chain[-1],
+                    allow_orientation_fallback=False,
+                )
             attempts.append(
                 {
                     "transport_yaw_offset_deg": yaw_offset_deg,
                     "reorientation_reachable": True,
                     "goal_position": candidate_goal.tolist(),
                     "place_tcp": place_tcp.tolist(),
+                    "place_hover": place_hover.tolist(),
+                    "transport_gate": "sparse_endpoint_ik",
+                    "hover_reachable": hover_chain is not None,
                     "reachable": place_chain is not None,
                     "ik_diagnostics": dict(
                         getattr(controller, "last_pose_waypoint_diagnostics", {})
@@ -2650,54 +2659,6 @@ def execute_pick_place(object_name, target_name):
                 f"xy={candidate_goal[:2]}, "
                 f"extra_clearance={clearance:.3f} m"
             )
-            if canonical_object_name in {
-                "master_chef_can",
-                "tomato_soup_can",
-            }:
-                # Cans use a straight semantic transport corridor. Extra
-                # interpolated points made the fast IK gate switch wrist
-                # branches near the basket, although the collision-aware RRT
-                # below already validates the two transport segments.
-                quick_keyposes = [
-                    source_clear_position,
-                    target_clear_position,
-                    candidate_hover,
-                    candidate_place_gripper,
-                ]
-            else:
-                quick_keyposes = [
-                    *state._diffuser.diffuse_cartesian_keyposes(
-                        [lift_position, source_clear_position], max_spacing=0.06
-                    )[1:],
-                    *state._diffuser.diffuse_cartesian_keyposes(
-                        [source_clear_position, target_clear_position],
-                        max_spacing=0.06,
-                    )[1:],
-                    *state._diffuser.diffuse_cartesian_keyposes(
-                        [target_clear_position, candidate_hover], max_spacing=0.05
-                    )[1:],
-                    *state._diffuser.diffuse_cartesian_keyposes(
-                        [candidate_hover, candidate_place_gripper], max_spacing=0.04
-                    )[1:],
-                ]
-            quick_ik = state.controller.plan_pose_waypoints(
-                quick_keyposes,
-                target_orientation=transport_orientation,
-                warm_start=get_active_joint_positions(),
-                allow_orientation_fallback=False,
-            )
-            attempt = {
-                "candidate_index": candidate_index,
-                "candidate_goal_position": candidate_goal.tolist(),
-                "extra_clearance_m": clearance,
-                "keyposes": [point.tolist() for point in quick_keyposes],
-                "complete_pose_ik": quick_ik is not None,
-                "success": False,
-            }
-            if quick_ik is None:
-                carry_planning_attempts.append(attempt)
-                continue
-
             fallback_keyposes = []
             previous_point = lift_position
             for candidate_point in (
@@ -2708,6 +2669,15 @@ def execute_pick_place(object_name, target_name):
                     continue
                 fallback_keyposes.append(candidate_point)
                 previous_point = candidate_point
+            attempt = {
+                "candidate_index": candidate_index,
+                "candidate_goal_position": candidate_goal.tolist(),
+                "extra_clearance_m": clearance,
+                "keyposes": [point.tolist() for point in fallback_keyposes],
+                "transport_gate": "collision_free_sparse_keyposes",
+                "success": False,
+            }
+
             planned_path = plan_collision_free_keyposes(
                 fallback_keyposes,
                 orientation=transport_orientation,

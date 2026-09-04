@@ -3,13 +3,43 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
 import socket
 import sys
 import time
 
-# Add execution path for FileTaskClient import
-_aura_root = Path(__file__).resolve().parent.parent.parent
+# The launcher can be imported from a colcon ``install`` tree while Isaac must
+# hot-reload sources from the active workspace. Resolve the workspace once and
+# use it for every injected runtime file.
+def _is_aura_workspace(path: Path) -> bool:
+    return (
+        (path / "aura_bringup" / "config" / "config.yaml").is_file()
+        and (path / "aura_hardware" / "aura_isaac_bridge" / "robot" / "robot.py").is_file()
+    )
+
+
+def _find_aura_workspace() -> Path:
+    configured_root = os.environ.get("AURA_VLA_ROOT")
+    if configured_root:
+        candidate = Path(configured_root).expanduser().resolve()
+        if _is_aura_workspace(candidate):
+            return candidate
+
+    # This covers direct source execution. The environment variable is the
+    # required mechanism when this module originates from ``install``.
+    for origin in (Path(__file__).resolve(), Path.cwd().resolve()):
+        for candidate in (origin, *origin.parents):
+            if _is_aura_workspace(candidate):
+                return candidate
+    raise RuntimeError(
+        "Unable to locate the AuraVLA workspace. Set AURA_VLA_ROOT to the "
+        "project directory before starting the NVIDIA agent."
+    )
+
+
+# Add execution path for FileTaskClient import.
+_aura_root = _find_aura_workspace()
 _execution_path = _aura_root / "aura_execution" / "aura_execution"
 for _path in (
     _execution_path,
@@ -55,17 +85,19 @@ class IsaacRuntimeLauncher:
     ) -> None:
         self.task_client = task_client
         self.config = config or IsaacRuntimeConfig()
+        self.project_root = _aura_root
         self.camera_directory = Path(camera_directory).expanduser().resolve()
+        source_bridge_root = (
+            self.project_root / "aura_hardware" / "aura_isaac_bridge"
+        )
         self.entry_path = Path(
-            entry_path or Path(__file__).with_name("robot").joinpath("robot.py")
+            entry_path or source_bridge_root / "robot" / "robot.py"
         ).expanduser().resolve()
         self.reload_entry_path = Path(
-            reload_entry_path
-            or Path(__file__).with_name("robot").joinpath("robot.py")
+            reload_entry_path or source_bridge_root / "robot" / "robot.py"
         ).expanduser().resolve()
         self.camera_entry_path = Path(
-            camera_entry_path
-            or Path(__file__).with_name("start_camera_bridge.py")
+            camera_entry_path or source_bridge_root / "start_camera_bridge.py"
         ).expanduser().resolve()
         self._source_sender = source_sender or self._send_source
 
@@ -165,6 +197,8 @@ class IsaacRuntimeLauncher:
 
     def _with_camera_environment(self, source: str) -> str:
         camera_directory = repr(str(self.camera_directory))
+        project_root = str(self.project_root)
+        bridge_root = str(self.project_root / "aura_hardware" / "aura_isaac_bridge")
         prelude = (
             "import os\n"
             "import sys\n"
@@ -176,10 +210,10 @@ class IsaacRuntimeLauncher:
             "        if _parent is not None and getattr(_parent, _module_name.rsplit('.', 1)[1], None) is _module:\n"
             "            delattr(_parent, _module_name.rsplit('.', 1)[1])\n"
             "importlib.invalidate_caches()\n"
-            f"os.environ['AURA_VLA_ROOT'] = {str(_aura_root)!r}\n"
-            f"os.environ['AURA_ISAAC_BRIDGE_ROOT'] = {str(_aura_root / 'aura_hardware' / 'aura_isaac_bridge')!r}\n"
+            f"os.environ['AURA_VLA_ROOT'] = {project_root!r}\n"
+            f"os.environ['AURA_ISAAC_BRIDGE_ROOT'] = {bridge_root!r}\n"
             f"os.environ['AURA_CAMERA_DIR'] = {camera_directory}\n"
-            f"os.environ.setdefault('AURA_TRON2_URDF_PATH', {str(_aura_root / 'aura_description' / 'urdf' / 'tron2_v5_DACH_validing' / 'robot.urdf')!r})\n"
+            f"os.environ.setdefault('AURA_TRON2_URDF_PATH', {str(self.project_root / 'aura_description' / 'urdf' / 'tron2_v5_DACH_validing' / 'robot.urdf')!r})\n"
         )
         lines = source.splitlines(keepends=True)
         for index, line in enumerate(lines):

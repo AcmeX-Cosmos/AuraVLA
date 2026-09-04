@@ -56,7 +56,7 @@ def _load_aura_runtime_config() -> None:
     planner = settings.get("planner") or {}
     camera = settings.get("camera") or {}
     perception = settings.get("perception") or {}
-    grasp_backend = str(perception.get("grasp_backend", "anygrasp")).strip().lower()
+    grasp_backend = str(perception.get("grasp_backend", "graspnet")).strip().lower()
     anygrasp_calibration = perception.get("anygrasp_calibration") or {}
     anygrasp = perception.get("anygrasp") or {}
     graspnet_calibration = perception.get("graspnet_calibration") or {}
@@ -300,6 +300,12 @@ from aura_isaac_bridge.core.task import (
     execute_pick_place,
     snapshot_scene_object_pose, restore_scene_object_pose,
 )
+
+# Make hot-reload provenance visible in the Isaac console. This is important
+# because the NVIDIA agent and Isaac Sim are long-lived processes and may each
+# have an installed AuraVLA package on their import path.
+print(f"AuraVLA task source: {Path(sys.modules['aura_isaac_bridge.core.task'].__file__).resolve()}")
+print("AuraVLA transport gate: sparse_endpoint_ik")
 
 # 包装函数：pick + reset，供 restore_isaac_runtime 检测
 def execute_pick_place_with_reset(object_name, target_name):

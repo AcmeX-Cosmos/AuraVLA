@@ -8,6 +8,7 @@ from aura_perception.nvidia_agent import (
     NvidiaConfig,
     NvidiaTransientError,
     NvidiaVLAgent,
+    _summarize_execution_result,
 )
 
 
@@ -100,6 +101,76 @@ class NvidiaBuildBackendRetryTest(unittest.TestCase):
                 )
 
         self.assertEqual(urlopen_mock.call_count, 1)
+
+
+class ExecutionSummaryTest(unittest.TestCase):
+    def test_failure_summary_hides_internal_planning_diagnostics(self):
+        response = {
+            "request_id": "658dd698d9654c3cb59a3aafe7376272",
+            "success": False,
+            "execution": {
+                "success": False,
+                "state": "failed",
+                "reason": "no strictly reachable banana short-axis grasp pose",
+                "results": [
+                    {
+                        "object_name": "banana",
+                        "target_name": "basket",
+                        "success": False,
+                        "message": "no strictly reachable banana short-axis grasp pose",
+                        "details": {
+                            "banana_pose_attempts": [{"ik_diagnostics": {"waypoint_count": 11}}],
+                            "grasp_fusion": {"backend": "graspnet"},
+                        },
+                    }
+                ],
+            },
+        }
+
+        summary = _summarize_execution_result(
+            json.dumps(response), "/tmp/aura-vla-control/response.json"
+        )
+
+        self.assertEqual(
+            summary,
+            "executor> FAILED [graspnet] banana -> basket: "
+            "no strictly reachable banana short-axis grasp pose, request=658dd698; "
+            "details=/tmp/aura-vla-control/response.json",
+        )
+        self.assertNotIn("banana_pose_attempts", summary)
+        self.assertNotIn("waypoint_count", summary)
+
+    def test_success_summary_is_compact(self):
+        response = {
+            "request_id": "sandbox-success-123456",
+            "success": True,
+            "execution": {
+                "success": True,
+                "state": "completed",
+                "results": [
+                    {
+                        "object_name": "banana",
+                        "target_name": "basket",
+                        "success": True,
+                        "message": "placed successfully",
+                        "details": {
+                            "grasp_fusion": {"backend": "graspnet"},
+                            "banana_pose_attempts": [{"waypoint_count": 11}],
+                        },
+                    }
+                ],
+            },
+        }
+
+        summary = _summarize_execution_result(json.dumps(response), "/tmp/response.json")
+
+        self.assertEqual(
+            summary,
+            "executor> SUCCESS [graspnet] banana -> basket: "
+            "placed successfully, request=sandbox-; details=/tmp/response.json",
+        )
+        self.assertNotIn("banana_pose_attempts", summary)
+        self.assertNotIn("waypoint_count", summary)
 
 
 if __name__ == "__main__":

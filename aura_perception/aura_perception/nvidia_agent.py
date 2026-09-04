@@ -1089,7 +1089,13 @@ def main(argv: list[str] | None = None) -> int:
             runtime_launcher,
         )
         if execution_json is not None:
-            print(execution_json)
+            print(
+                _summarize_execution_result(
+                    execution_json,
+                    task_client.paths.response,
+                ),
+                flush=True,
+            )
     return 0
 
 
@@ -1228,7 +1234,13 @@ def _run_chat_loop(
                 print(f"executor> ERROR: {exc}")
                 continue
             if execution_json is not None:
-                print(f"executor> {execution_json}")
+                print(
+                    _summarize_execution_result(
+                        execution_json,
+                        task_client.paths.response,
+                    ),
+                    flush=True,
+                )
 
 
 def _is_text_only_chat_message(message: str) -> bool:
@@ -1463,7 +1475,7 @@ def _dispatch_plan_to_isaac(
     plan = loads_json(plan_json)
     if not plan.get("doable", False):
         return None
-    print("executor> releasing VLM resources before AnyGrasp...", flush=True)
+    print("executor> releasing VLM resources before grasp inference...", flush=True)
     agent.release_resources()
     if runtime_launcher is not None:
         print("executor> checking Isaac runtime...", flush=True)
@@ -1471,6 +1483,40 @@ def _dispatch_plan_to_isaac(
             print("executor> Isaac runtime restored", flush=True)
     print("executor> waiting for Isaac...", flush=True)
     return task_client.execute(plan_json)
+
+
+def _summarize_execution_result(
+    execution_json: str,
+    response_path: str | Path | None = None,
+) -> str:
+    """Return a short terminal line while keeping full diagnostics on disk."""
+    try:
+        execution = loads_json(execution_json)
+    except (TypeError, ValueError):
+        return f"executor> result: {str(execution_json)[:240]}"
+
+    results = execution.get("execution", {}).get("results") or []
+    result = results[-1] if results else {}
+    details = result.get("details") or {}
+    fusion = details.get("grasp_fusion") or {}
+    backend = fusion.get("backend") or details.get("backend")
+    object_name = result.get("object_name") or "object"
+    target_name = result.get("target_name") or "target"
+    status = "SUCCESS" if execution.get("success") else "FAILED"
+    message = str(
+        result.get("message")
+        or execution.get("execution", {}).get("reason")
+        or execution.get("error")
+        or "unknown execution result"
+    )
+    backend_label = f" [{backend}]" if backend else ""
+    request_id = str(execution.get("request_id") or "")[:8]
+    request_label = f", request={request_id}" if request_id else ""
+    detail_label = f"; details={response_path}" if response_path else ""
+    return (
+        f"executor> {status}{backend_label} {object_name} -> {target_name}: "
+        f"{message}{request_label}{detail_label}"
+    )
 
 
 def _camera_frame_age_sec(bridge_paths: Any, *, now: float | None = None) -> float:
