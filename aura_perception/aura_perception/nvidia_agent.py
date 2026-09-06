@@ -618,8 +618,8 @@ class NvidiaBuildBackend:
         if fallback:
             return (fallback,)
         raise RuntimeError(
-            "NVIDIA_API_KEY is not set. Generate a key at build.nvidia.com "
-            "and export it before starting AuraVLA."
+            "NVIDIA_API_KEY or NVIDIA_API_KEYS is not set. Generate a key at "
+            "build.nvidia.com and configure it before starting AuraVLA."
         )
 
     def _api_key(self, api_key: str | None = None) -> str:

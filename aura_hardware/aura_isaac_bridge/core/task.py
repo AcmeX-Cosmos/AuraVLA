@@ -67,6 +67,7 @@ from aura_isaac_bridge.core.perception import (
     get_mesh_extent_along_axis,
     get_mesh_horizontal_min_width_axis,
     get_current_mesh_horizontal_cross_section_center,
+    get_current_mesh_horizontal_cross_section_geometry,
     get_mesh_horizontal_principal_axes,
     show_red_grasp_point,
     release_cuda_inference_cache,
@@ -782,31 +783,27 @@ def _evaluate_complete_task_pose_chain(
     nominal_goal_position,
 ):
     """Fast IK gate for one fixed grasp orientation over the complete task."""
-    selected_side = grasp_reachability.get("selected")
-    controller = (getattr(state, "arm_controllers", None) or {}).get(selected_side)
-    arm = (getattr(state, "arm_views", None) or {}).get(selected_side)
-    if controller is None or arm is None:
-        return {"reachable": False, "reason": "selected arm is unavailable"}
-
     grasp_tcp = get_tcp_target_for_gripper_center(object_position, orientation)
     approach_direction = quat_rotate(orientation, np.array([1.0, 0.0, 0.0]))
     approach_direction /= max(float(np.linalg.norm(approach_direction)), 1e-9)
     hover_tcp = grasp_tcp - approach_direction * 0.12
     lift_tcp = grasp_tcp + np.array([0.0, 0.0, TRANSPORT_LIFT_HEIGHT])
-    grasp_chain = controller.plan_pose_waypoints(
-        [hover_tcp, grasp_tcp, lift_tcp],
-        target_orientation=orientation,
-        warm_start=arm.get_joint_positions(),
-        allow_orientation_fallback=False,
-    )
-    if grasp_chain is None:
-        return {"reachable": False, "reason": "grasp chain IK failed"}
 
     goal_candidates = [np.asarray(nominal_goal_position, dtype=float).copy()]
+    minimum_safe_hover_z = None
     if state.SCENE_NAME_RESOLVER.canonicalize(target_name) == "basket":
         target_path = resolve_scene_prim_path(target_name)
         _, target_min, target_max = get_bbox_center(
             get_current_stage(), target_path
+        )
+        payload_drop_below_tcp = max(
+            float(grasp_tcp[2] - np.asarray(bbox_min, dtype=float)[2]),
+            0.0,
+        )
+        minimum_safe_hover_z = (
+            float(target_max[2])
+            + payload_drop_below_tcp
+            + max(BASKET_PLANNING_MARGIN, 0.02)
         )
         payload_half_extents = 0.5 * (
             np.asarray(bbox_max, dtype=float)[:2]
@@ -825,85 +822,155 @@ def _evaluate_complete_task_pose_chain(
             candidate_goal[:2] = candidate_xy
             goal_candidates.append(candidate_goal)
 
+    selected_side = grasp_reachability.get("selected")
+    candidate_sides = []
+    for side in (selected_side, "right", "left"):
+        if (
+            side in {"right", "left"}
+            and side not in candidate_sides
+            and grasp_reachability.get(side, False)
+        ):
+            candidate_sides.append(side)
+    if not candidate_sides:
+        return {"reachable": False, "reason": "no grasp-reachable arm is available"}
+
     attempts = []
     canonical_object_name = state.SCENE_NAME_RESOLVER.canonicalize(object_name)
     if canonical_object_name == "banana":
-        # A banana is held by a narrow, curved contact region. Rotating the
-        # wrist after closing changes the finger collision envelope and can
-        # lever the object out of the grasp. Keep the detector-selected
-        # tabletop orientation throughout transport; the placement planner
-        # still searches basket candidates and collision-free routes.
-        yaw_offsets = [0]
+        # Preserve the strict short-axis pickup pose through closure and lift,
+        # then permit only bounded high-clearance wrist rotations. The live
+        # execution path verifies payload containment immediately after this
+        # reorientation and aborts before transport if the banana slips.
+        yaw_offsets = [0, 15, -15, 30, -30, 45, -45]
     else:
         yaw_offsets = [0, 15, -15, 30, -30, 45, -45, 60, -60, 90, -90]
-    for yaw_offset_deg in yaw_offsets:
-        transport_orientation = rotate_grasp_about_approach_axis(
-            orientation, math.radians(yaw_offset_deg)
+    for candidate_side in candidate_sides:
+        controller = (getattr(state, "arm_controllers", None) or {}).get(
+            candidate_side
         )
-        orientation_path = interpolate_quaternions(
-            orientation, transport_orientation
-        )
-        reorientation_chain = controller.plan_pose_waypoints_with_orientations(
-            [lift_tcp] * len(orientation_path),
-            orientation_path,
-            warm_start=grasp_chain[-1],
-        )
-        if reorientation_chain is None:
+        arm = (getattr(state, "arm_views", None) or {}).get(candidate_side)
+        if controller is None or arm is None:
             attempts.append(
                 {
-                    "transport_yaw_offset_deg": yaw_offset_deg,
-                    "reorientation_reachable": False,
+                    "arm": candidate_side,
+                    "grasp_chain_reachable": False,
+                    "reason": "arm controller is unavailable",
                 }
             )
             continue
-        for candidate_goal in goal_candidates:
-            place_tcp = get_tcp_target_for_gripper_center(
-                candidate_goal, transport_orientation
-            )
-            place_hover = place_tcp + np.array([0.0, 0.0, 0.22])
-            place_hover[2] = max(place_hover[2], lift_tcp[2])
-            # The execution path uses a collision-aware sparse RRT for the
-            # transport corridor. Do not reject that path with a denser
-            # fixed-orientation Cartesian IK sweep: near the edge of this
-            # arm's workspace Lula can fail on an interpolated point even
-            # when both corridor endpoints and the final descent are valid.
-            hover_chain = controller.plan_pose_waypoints(
-                [place_hover],
-                target_orientation=transport_orientation,
-                warm_start=reorientation_chain[-1],
-                allow_orientation_fallback=False,
-            )
-            place_chain = None
-            if hover_chain is not None:
-                place_chain = controller.plan_pose_waypoints(
-                    [place_tcp],
-                    target_orientation=transport_orientation,
-                    warm_start=hover_chain[-1],
-                    allow_orientation_fallback=False,
-                )
+        grasp_chain = controller.plan_pose_waypoints(
+            [hover_tcp, grasp_tcp, lift_tcp],
+            target_orientation=orientation,
+            warm_start=arm.get_joint_positions(),
+            allow_orientation_fallback=False,
+        )
+        if grasp_chain is None:
             attempts.append(
                 {
-                    "transport_yaw_offset_deg": yaw_offset_deg,
-                    "reorientation_reachable": True,
-                    "goal_position": candidate_goal.tolist(),
-                    "place_tcp": place_tcp.tolist(),
-                    "place_hover": place_hover.tolist(),
-                    "transport_gate": "sparse_endpoint_ik",
-                    "hover_reachable": hover_chain is not None,
-                    "reachable": place_chain is not None,
-                    "ik_diagnostics": dict(
-                        getattr(controller, "last_pose_waypoint_diagnostics", {})
-                    ),
+                    "arm": candidate_side,
+                    "grasp_chain_reachable": False,
+                    "reason": "grasp chain IK failed",
                 }
             )
-            if place_chain is not None:
-                return {
-                    "reachable": True,
-                    "selected_goal_position": candidate_goal.tolist(),
-                    "transport_yaw_offset_deg": yaw_offset_deg,
-                    "transport_orientation": transport_orientation.tolist(),
-                    "attempts": attempts,
-                }
+            continue
+        for yaw_offset_deg in yaw_offsets:
+            transport_orientation = rotate_grasp_about_approach_axis(
+                orientation, math.radians(yaw_offset_deg)
+            )
+            orientation_path = interpolate_quaternions(
+                orientation, transport_orientation
+            )
+            reorientation_chain = controller.plan_pose_waypoints_with_orientations(
+                [lift_tcp] * len(orientation_path),
+                orientation_path,
+                warm_start=grasp_chain[-1],
+            )
+            if reorientation_chain is None:
+                attempts.append(
+                    {
+                        "arm": candidate_side,
+                        "grasp_chain_reachable": True,
+                        "transport_yaw_offset_deg": yaw_offset_deg,
+                        "reorientation_reachable": False,
+                    }
+                )
+                continue
+            for candidate_goal in goal_candidates:
+                place_tcp = get_tcp_target_for_gripper_center(
+                    candidate_goal, transport_orientation
+                )
+                hover_clearances = (
+                    (0.22, 0.20, 0.18, 0.16, 0.14, 0.12)
+                    if canonical_object_name == "banana"
+                    else (0.22,)
+                )
+                attempted_hover_z = []
+                for hover_clearance in hover_clearances:
+                    place_hover = place_tcp + np.array(
+                        [0.0, 0.0, hover_clearance]
+                    )
+                    place_hover[2] = max(
+                        float(place_hover[2]),
+                        float(lift_tcp[2]),
+                        float(minimum_safe_hover_z or -np.inf),
+                    )
+                    if any(
+                        abs(float(place_hover[2]) - previous_z) < 1e-6
+                        for previous_z in attempted_hover_z
+                    ):
+                        continue
+                    attempted_hover_z.append(float(place_hover[2]))
+                    # The execution path uses a collision-aware sparse RRT for
+                    # the transport corridor. The endpoint gate preserves the
+                    # fixed wrist pose while allowing the lowest payload-safe
+                    # basket entry height near the edge of the arm workspace.
+                    hover_chain = controller.plan_pose_waypoints(
+                        [place_hover],
+                        target_orientation=transport_orientation,
+                        warm_start=reorientation_chain[-1],
+                        allow_orientation_fallback=False,
+                    )
+                    place_chain = None
+                    if hover_chain is not None:
+                        place_chain = controller.plan_pose_waypoints(
+                            [place_tcp],
+                            target_orientation=transport_orientation,
+                            warm_start=hover_chain[-1],
+                            allow_orientation_fallback=False,
+                        )
+                    attempts.append(
+                        {
+                            "arm": candidate_side,
+                            "grasp_chain_reachable": True,
+                            "transport_yaw_offset_deg": yaw_offset_deg,
+                            "reorientation_reachable": True,
+                            "goal_position": candidate_goal.tolist(),
+                            "place_tcp": place_tcp.tolist(),
+                            "place_hover": place_hover.tolist(),
+                            "place_hover_clearance_m": float(
+                                place_hover[2] - place_tcp[2]
+                            ),
+                            "minimum_safe_hover_z_m": minimum_safe_hover_z,
+                            "transport_gate": "payload_safe_sparse_endpoint_ik",
+                            "hover_reachable": hover_chain is not None,
+                            "reachable": place_chain is not None,
+                            "ik_diagnostics": dict(
+                                getattr(controller, "last_pose_waypoint_diagnostics", {})
+                            ),
+                        }
+                    )
+                    if place_chain is not None:
+                        return {
+                            "reachable": True,
+                            "selected_arm": candidate_side,
+                            "selected_goal_position": candidate_goal.tolist(),
+                            "place_hover_clearance_m": float(
+                                place_hover[2] - place_tcp[2]
+                            ),
+                            "transport_yaw_offset_deg": yaw_offset_deg,
+                            "transport_orientation": transport_orientation.tolist(),
+                            "attempts": attempts,
+                        }
     return {
         "reachable": False,
         "reason": "no fixed-orientation placement candidate is reachable",
@@ -1273,6 +1340,7 @@ def execute_pick_place(object_name, target_name):
                 }
             )
     planned_transport_yaw_deg = 0.0
+    planned_place_hover_clearance_m = 0.22
     if canonical_object_name == "banana":
         desired_short_axis = get_mesh_horizontal_principal_axes(
             get_current_stage(),
@@ -1378,6 +1446,10 @@ def execute_pick_place(object_name, target_name):
                     )
                     if not task_pose_gate["reachable"]:
                         continue
+                    selected_task_arm = task_pose_gate.get("selected_arm")
+                    if selected_task_arm != candidate_reachability.get("selected"):
+                        candidate_reachability = dict(candidate_reachability)
+                        candidate_reachability["selected"] = selected_task_arm
                     selected_banana_candidate = (
                         tilt_deg,
                         opposite_tool_branch,
@@ -1412,6 +1484,9 @@ def execute_pick_place(object_name, target_name):
                     )
                 planned_transport_yaw_deg = float(
                     task_pose_gate.get("transport_yaw_offset_deg", 0.0)
+                )
+                planned_place_hover_clearance_m = float(
+                    task_pose_gate.get("place_hover_clearance_m", 0.22)
                 )
                 print(
                     "🧭 香蕉改用严格可达的短轴抓取候选: "
@@ -1811,11 +1886,21 @@ def execute_pick_place(object_name, target_name):
     )
     live_closing_axis_3d = get_gripper_closing_axis()
     gripper_opening_width = float(get_gripper_inner_opening_width())
-    _, _, object_closing_width = get_mesh_extent_along_axis(
-        get_current_stage(),
-        object_prim_path,
-        live_closing_axis_3d,
-    )
+    if canonical_object_name == "banana":
+        _, object_closing_width = (
+            get_current_mesh_horizontal_cross_section_geometry(
+                get_current_stage(),
+                target_prim,
+                object_position[:2],
+                object_prim_path,
+            )
+        )
+    else:
+        _, _, object_closing_width = get_mesh_extent_along_axis(
+            get_current_stage(),
+            object_prim_path,
+            live_closing_axis_3d,
+        )
     # Preserve the 4 mm margin for banana, but use a 0.5 mm contact margin
     # for the DACH can.  Its measured PCA width is about 79.8 mm and the live
     # gripper opening is about 81.0 mm; a uniform 4 mm margin rejects the only
@@ -2017,7 +2102,9 @@ def execute_pick_place(object_name, target_name):
     lift_position = grasp_position + np.array(
         [0.0, 0.0, TRANSPORT_LIFT_HEIGHT]
     )
-    place_hover_position = place_gripper_position + np.array([0.0, 0.0, 0.22])
+    place_hover_position = place_gripper_position + np.array(
+        [0.0, 0.0, planned_place_hover_clearance_m]
+    )
     approach_result = move_ee_collision_aware_approach(
         "grasp_approach",
         grasp_position,
@@ -2214,7 +2301,9 @@ def execute_pick_place(object_name, target_name):
     lift_position = grasp_position + np.array(
         [0.0, 0.0, TRANSPORT_LIFT_HEIGHT]
     )
-    place_hover_position = place_gripper_position + np.array([0.0, 0.0, 0.22])
+    place_hover_position = place_gripper_position + np.array(
+        [0.0, 0.0, planned_place_hover_clearance_m]
+    )
 
     live_closing_axis = get_gripper_closing_axis()[:2]
     validated_closing_axis = np.asarray(desired_closing_axis, dtype=float)[:2]
@@ -2310,6 +2399,11 @@ def execute_pick_place(object_name, target_name):
         frames=get_gripper_close_frames(object_name),
         target_close=nominal_gripper_close_target,
         monitor_table_clearance=True,
+        maximum_contact_opening_width=(
+            float(object_closing_width + aperture_margin)
+            if canonical_object_name == "banana"
+            else None
+        ),
     )
     gripper_close_target = np.asarray(
         close_result["hold_target"], dtype=float
@@ -2332,6 +2426,7 @@ def execute_pick_place(object_name, target_name):
         "🧪 夹持接触校验: "
         f"feedback={gripper_feedback}, target={gripper_close_target}, "
         f"efforts={measured_efforts}N, "
+        f"opening={close_result['opening_width_m']:.4f}m, "
         f"blocked_residual={closure_residual:.4f}m, "
         f"object_displacement={close_displacement:.4f}m, "
         f"confirmed={contact_confirmed}"
@@ -2355,6 +2450,10 @@ def execute_pick_place(object_name, target_name):
             "target_name": str(target_name),
             "gripper_feedback": gripper_feedback.tolist(),
             "gripper_efforts_n": measured_efforts.tolist(),
+            "gripper_opening_width_m": close_result["opening_width_m"],
+            "maximum_contact_opening_width_m": close_result[
+                "maximum_contact_opening_width_m"
+            ],
             "closure_residual_m": closure_residual,
             "object_displacement_m": close_displacement,
             "object_position_before_close": object_position_before_close.tolist(),
@@ -2393,7 +2492,18 @@ def execute_pick_place(object_name, target_name):
     # Keep the wrist orientation constrained throughout lift/carry. Object
     # motion is governed only by finger contact, friction, and gravity.
     transport_orientation = grasp_motion_orientation
-    live_object_before_lift, _, _ = get_sim_pose(target_prim)
+    live_object_before_lift, live_object_orientation, _ = get_sim_pose(target_prim)
+    grasp_reference_local = quat_to_rot_matrix(live_object_orientation).T @ (
+        np.asarray(physical_alignment_center, dtype=float)
+        - live_object_before_lift
+    )
+
+    def current_grasp_reference_center():
+        live_position, live_orientation, _ = get_sim_pose(target_prim)
+        return live_position + quat_to_rot_matrix(live_orientation) @ (
+            grasp_reference_local
+        )
+
     print(
         f"🧪 闭合后抓取诊断: object={live_object_before_lift}, "
         f"finger_center={get_gripper_collision_center()}, "
@@ -2467,6 +2577,10 @@ def execute_pick_place(object_name, target_name):
             "gripper_feedback": gripper_feedback.tolist(),
             "gripper_target": gripper_close_target.tolist(),
             "gripper_efforts_n": measured_efforts.tolist(),
+            "gripper_opening_width_m": close_result["opening_width_m"],
+            "maximum_contact_opening_width_m": close_result[
+                "maximum_contact_opening_width_m"
+            ],
             "finger_contacts": close_result["finger_contacts"].tolist(),
             "grasp_containment": grasp_containment,
             "preclose_table_clearance_m": preclose_table_clearance,
@@ -2534,7 +2648,7 @@ def execute_pick_place(object_name, target_name):
         post_rotation_containment = get_object_gripper_containment(
             object_prim_path,
             target_prim=target_prim,
-            reference_center=physical_alignment_center,
+            reference_center=current_grasp_reference_center(),
         )
         if not post_rotation_containment["contained"]:
             return {
@@ -2552,7 +2666,9 @@ def execute_pick_place(object_name, target_name):
     place_gripper_position = get_tcp_target_for_gripper_center(
         goal_position, transport_orientation
     )
-    place_hover_position = place_gripper_position + np.array([0.0, 0.0, 0.22])
+    place_hover_position = place_gripper_position + np.array(
+        [0.0, 0.0, planned_place_hover_clearance_m]
+    )
     base_carry_height = max(lift_position[2], place_hover_position[2])
     _, carried_bbox_min, carried_bbox_max = get_current_bbox_center(
         get_current_stage(),
@@ -2830,7 +2946,7 @@ def execute_pick_place(object_name, target_name):
                 transport_orientation,
             )
             replanned_place_hover = replanned_place_gripper + np.array(
-                [0.0, 0.0, 0.22], dtype=float
+                [0.0, 0.0, planned_place_hover_clearance_m], dtype=float
             )
             replanned_place_hover[2] = max(
                 float(replanned_place_hover[2]),

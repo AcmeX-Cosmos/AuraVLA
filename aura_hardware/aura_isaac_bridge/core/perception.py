@@ -34,7 +34,7 @@ from aura_isaac_bridge.core.state import (
     DEFAULT_PROJECT_ROOT, DEFAULT_ISAAC_SIM_ROOT, DEFAULT_ISAAC_SITE_PACKAGES,
     ANYGRASP_DIR, ANYGRASP_CHECKPOINT_PATH, SAM_MODEL_PATH,
     DEFAULT_ANYGRASP_DIR, DEFAULT_SAM_MODEL_PATH,
-    GRASPNET_DIR, GRASPNET_CHECKPOINT_PATH,
+    GRASPNET_DIR, GRASPNET_CHECKPOINT_PATH, GRASPNET_NUM_POINT,
     ANYGRASP_CALIBRATION_ENABLED, ANYGRASP_CAMERA_OFFSET,
     ANYGRASP_CALIBRATION_MAX_CORRECTION,
     CAMERA_PRIM_PATH, CAMERA_RESOLUTION, CAMERA_PREVIEW_RESOLUTION,
@@ -186,7 +186,7 @@ def get_mesh_extent_along_axis(stage, prim_path, axis):
     return minimum, maximum, maximum - minimum
 
 
-def get_mesh_horizontal_cross_section_center(
+def get_mesh_horizontal_cross_section_geometry(
     stage,
     prim_path,
     source_xy,
@@ -237,10 +237,26 @@ def get_mesh_horizontal_cross_section_center(
     section_short_center = float(
         (np.min(short_coordinates) + np.max(short_coordinates)) * 0.5
     )
-    return (
-        long_axis * source_long
-        + short_axis * section_short_center
+    section_short_width = float(
+        np.max(short_coordinates) - np.min(short_coordinates)
     )
+    center = long_axis * source_long + short_axis * section_short_center
+    return center, section_short_width
+
+
+def get_mesh_horizontal_cross_section_center(
+    stage,
+    prim_path,
+    source_xy,
+    half_width=0.018,
+):
+    center, _ = get_mesh_horizontal_cross_section_geometry(
+        stage,
+        prim_path,
+        source_xy,
+        half_width=half_width,
+    )
+    return center
 
 
 def get_mesh_center(stage, prim_path):
@@ -420,6 +436,34 @@ def get_current_mesh_horizontal_cross_section_center(
         [usd_center_xy[0], usd_center_xy[1], usd_source[2]], dtype=float
     )
     return transform_usd_world_points_to_sim(target_prim, usd_center)[:2]
+
+
+def get_current_mesh_horizontal_cross_section_geometry(
+    stage,
+    target_prim,
+    source_xy,
+    prim_path=None,
+    half_width=0.018,
+):
+    prim_path = str(prim_path or target_prim.prim_path)
+    sim_position, _, _, _ = _get_usd_to_sim_geometry_transform(target_prim)
+    sim_source = np.asarray(
+        [source_xy[0], source_xy[1], sim_position[2]], dtype=float
+    )
+    usd_source = transform_sim_world_points_to_usd(target_prim, sim_source)
+    usd_center_xy, section_width = get_mesh_horizontal_cross_section_geometry(
+        stage,
+        prim_path,
+        usd_source[:2],
+        half_width=half_width,
+    )
+    usd_center = np.asarray(
+        [usd_center_xy[0], usd_center_xy[1], usd_source[2]], dtype=float
+    )
+    sim_center_xy = transform_usd_world_points_to_sim(
+        target_prim, usd_center
+    )[:2]
+    return sim_center_xy, float(section_width)
 
 def show_red_grasp_point(stage, position, radius=0.015):
     marker_path = "/World/debug_grasp_point"
@@ -1063,6 +1107,7 @@ def load_graspnet_demo():
         )
     if hasattr(demo_module, "cfgs"):
         demo_module.cfgs.checkpoint_path = str(GRASPNET_CHECKPOINT_PATH)
+        demo_module.cfgs.num_point = GRASPNET_NUM_POINT
 
     original_get_net = getattr(demo_module, "get_net", None)
     if original_get_net is None:
@@ -1172,6 +1217,15 @@ def infer_graspnet_fused_world_pose(
     mask = segment_target_with_sam(stage, camera, target_prim, rgb_data, prim_path=target_prim.prim_path)
     if not np.any(mask.astype(bool) & (depth_mm > 0)):
         raise RuntimeError("SAM 掩码区域没有有效深度，请检查相机视角和目标提示点。")
+    # GraspNet and SAM do not fit reliably alongside Isaac's renderer on an
+    # 8 GB GPU. The mask is already on the CPU, so release SAM before loading
+    # the GraspNet network instead of keeping both models resident.
+    sam_model = state._sam_model
+    state._sam_model = None
+    if sam_model is not None and hasattr(sam_model, "to"):
+        sam_model.to("cpu")
+    del sam_model
+    release_cuda_inference_cache()
     intrinsic = np.asarray(camera.get_intrinsics_matrix(), dtype=float)
     _, target_bbox_min, target_bbox_max = get_current_bbox_center(
         stage, target_prim, target_prim.prim_path

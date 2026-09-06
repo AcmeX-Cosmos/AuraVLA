@@ -1535,6 +1535,7 @@ def close_gripper_slowly(
     frames=30,
     target_close=None,
     monitor_table_clearance=False,
+    maximum_contact_opening_width=None,
 ):
     print("🤏 双指独立力反馈闭合夹爪...")
     start_positions = np.array(state.dach_arm.gripper.get_joint_positions(), dtype=float)
@@ -1588,6 +1589,11 @@ def close_gripper_slowly(
         requested_steps = np.abs(
             commanded_positions - previous_feedback
         )
+        opening_width = float(get_gripper_inner_opening_width())
+        opening_ready = (
+            maximum_contact_opening_width is None
+            or opening_width <= float(maximum_contact_opening_width)
+        )
         effort_feedback_available = np.isfinite(measured_efforts)
         contact_candidates = (
             i >= max(4, frames // 5)
@@ -1598,7 +1604,7 @@ def close_gripper_slowly(
         ) & (
             (~effort_feedback_available)
             | (measured_efforts >= GRIPPER_CONTACT_FORCE_THRESHOLD)
-        )
+        ) & opening_ready
         contact_streaks = np.where(
             contacted,
             contact_streaks,
@@ -1616,7 +1622,8 @@ def close_gripper_slowly(
                 f"step={i + 1}, contacted={contacted.tolist()}, "
                 f"commands={commanded_positions}, "
                 f"feedback={feedback}, residuals={blocked_residuals} m, "
-                f"efforts={measured_efforts} N"
+                f"efforts={measured_efforts} N, "
+                f"opening={opening_width:.4f} m"
             )
         previous_feedback = feedback.copy()
         if monitor_table_clearance:
@@ -1665,16 +1672,11 @@ def close_gripper_slowly(
         residuals = np.maximum(feedback - hold_target, 0.0)
         measured_efforts = get_gripper_joint_efforts()
         effort_feedback_available = np.all(np.isfinite(measured_efforts))
-        needs_preload = (
-            measured_efforts < GRIPPER_CONTACT_FORCE_THRESHOLD
-            if effort_feedback_available
-            else residuals < GRIPPER_CONTACT_PRELOAD_RESIDUAL
-        )
-        hold_target = np.where(
-            needs_preload,
-            np.maximum(hold_target - preload_step, preload_limit),
-            hold_target,
-        )
+        # Always reach the configured preload before accepting force feedback.
+        # A curved object can produce a brief effort spike on one jaw while the
+        # opposite jaw is still lightly loaded. Stopping on that spike leaves
+        # an asymmetric command that releases the object as lift begins.
+        hold_target = np.maximum(hold_target - preload_step, preload_limit)
         state.dach_arm.gripper.set_joint_positions(hold_target)
         hold_ee_target(hold_position, orientation)
         step_app()
@@ -1689,7 +1691,10 @@ def close_gripper_slowly(
             if effort_feedback_available
             else np.all(residuals >= GRIPPER_CONTACT_PRELOAD_RESIDUAL)
         )
-        if preload_confirmed:
+        preload_target_reached = bool(
+            np.all(hold_target <= preload_limit + 1e-6)
+        )
+        if preload_confirmed and preload_target_reached:
             preload_streak += 1
         else:
             preload_streak = 0
@@ -1719,6 +1724,11 @@ def close_gripper_slowly(
     final_feedback = np.asarray(
         state.dach_arm.gripper.get_joint_positions(), dtype=float
     )
+    final_opening_width = float(get_gripper_inner_opening_width())
+    final_opening_ready = (
+        maximum_contact_opening_width is None
+        or final_opening_width <= float(maximum_contact_opening_width)
+    )
     final_residuals = np.maximum(final_feedback - hold_target, 0.0)
     final_residual = float(np.min(final_residuals))
     final_efforts = get_gripper_joint_efforts()
@@ -1727,7 +1737,7 @@ def close_gripper_slowly(
     # One DACH jaw can report a near-zero effort while its position drive is
     # visibly blocked by the object; discarding that residual whenever the
     # effort array exists creates a false one-finger failure.
-    final_finger_contacts = (
+    final_finger_contacts = final_opening_ready & (
         (final_residuals >= GRIPPER_CONTACT_PRELOAD_RESIDUAL)
         | (
             np.isfinite(final_efforts)
@@ -1743,6 +1753,8 @@ def close_gripper_slowly(
         "blocked_residual_m": final_residual,
         "blocked_residuals_m": final_residuals.copy(),
         "measured_efforts_n": final_efforts.copy(),
+        "opening_width_m": final_opening_width,
+        "maximum_contact_opening_width_m": maximum_contact_opening_width,
     }
 
 def open_gripper_slowly(

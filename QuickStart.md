@@ -138,7 +138,7 @@ RGB-D/SAM 分割、世界坐标转换、多帧加权融合、IK/RRT 规划和物
 
 ```yaml
 perception:
-  grasp_backend: "anygrasp"  # 或 "graspnet"
+  grasp_backend: "graspnet"  # graspnet | anygrasp
 ```
 
 也可以只对当前 Isaac runtime 进程切换，环境变量优先于 YAML：

@@ -77,6 +77,9 @@ GRASPNET_DIR = Path(
 GRASPNET_CHECKPOINT_PATH = Path(
     os.environ.get("GRASPNET_CHECKPOINT_PATH", GRASPNET_DIR / "checkpoint-rs.tar")
 ).expanduser().resolve()
+GRASPNET_NUM_POINT = max(
+    int(os.environ.get("AURA_GRASPNET_NUM_POINT", "8000")), 2048
+)
 DEFAULT_SAM_MODEL_PATH = SECTION3_DIR / "sam2.1_b.pt"
 SAM_MODEL_PATH = os.environ.get(
     "SAM_MODEL_PATH", str(DEFAULT_SAM_MODEL_PATH) if DEFAULT_SAM_MODEL_PATH.is_file() else "sam2.1_b.pt"

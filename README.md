@@ -225,8 +225,8 @@ export NVIDIA_API_KEY="your_nvidia_api_key_here"
 
 # The key is intentionally kept outside config.yaml. For local use:
 cp aura_bringup/config/nvidia.env.example aura_bringup/config/nvidia.local.env
-# Edit nvidia.local.env locally, then load it into the current shell.
-set -a; source aura_bringup/config/nvidia.local.env; set +a
+# Edit nvidia.local.env locally. start_nvidia_agent.sh loads this file
+# automatically; it is ignored by Git.
 ```
 
 ### Launch System

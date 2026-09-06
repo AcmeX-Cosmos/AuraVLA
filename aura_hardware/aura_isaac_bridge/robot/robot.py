@@ -87,6 +87,7 @@ def _load_aura_runtime_config() -> None:
     graspnet = perception.get("graspnet") or {}
     set_value("GRASPNET_BASELINE_DIR", graspnet.get("baseline_dir"))
     set_value("GRASPNET_CHECKPOINT_PATH", graspnet.get("checkpoint_path"))
+    set_value("AURA_GRASPNET_NUM_POINT", graspnet.get("num_point", 8000))
     set_value("AURA_GRASPNET_CALIBRATION_ENABLED", str(bool(graspnet_calibration.get("enabled", False))).lower())
     set_value("AURA_GRASPNET_CAMERA_OFFSET_JSON", json.dumps(graspnet_calibration.get("camera_offset_m", [0.0, 0.0, 0.0])))
     set_value("AURA_GRASPNET_CALIBRATION_MAX_CORRECTION_M", graspnet_calibration.get("max_correction_m", 0.06))
