@@ -121,6 +121,7 @@ def _load_aura_runtime_config() -> None:
         "AURA_BASKET_PLANNING_MARGIN": ("basket_planning_margin_m", 0.03),
         "AURA_BASKET_PLACE_TABLE_CLEARANCE": ("basket_place_table_clearance_m", 0.003),
         "AURA_MAX_GRASP_APPROACH_TILT_DEG": ("max_grasp_approach_tilt_deg", 15.0),
+        "AURA_CAN_MAX_GRASP_APPROACH_TILT_DEG": ("can_max_grasp_approach_tilt_deg", 30.0),
         "AURA_TARGET_GRASP_APPROACH_TILT_DEG": ("target_grasp_approach_tilt_deg", 10.0),
         "AURA_ACTION_WAYPOINT_LIMIT": ("action_waypoint_limit", 3),
         "AURA_GRIPPER_CLOSE_FRAMES": ("gripper_close_frames", 20),

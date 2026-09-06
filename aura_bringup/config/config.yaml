@@ -128,6 +128,9 @@ robot:
   basket_place_table_clearance_m: 0.003
   grasp_clearance_guard_pad_m: 0.0005
   max_grasp_approach_tilt_deg: 15.0
+  # Cylindrical cans have equivalent horizontal pinch axes and may need a
+  # steeper inward approach near the edge of the arm workspace.
+  can_max_grasp_approach_tilt_deg: 30.0
   target_grasp_approach_tilt_deg: 10.0
   # Use GraspNet first while AnyGrasp remains available as a config-selectable
   # alternative. The active backend is selected by perception.grasp_backend.

@@ -140,7 +140,8 @@ class IsaacRuntimeLauncher:
                 f"Isaac camera entry does not exist: {self.camera_entry_path}"
             )
         source = self._with_camera_environment(
-            self.camera_entry_path.read_text(encoding="utf-8")
+            self.camera_entry_path.read_text(encoding="utf-8"),
+            reload_modules=False,
         )
         # The VS Code executor evaluates source with its own globals, so a
         # script's ``if __name__ == '__main__'`` block is not reliable. The
@@ -195,11 +196,16 @@ class IsaacRuntimeLauncher:
             raise IsaacRuntimeError("Isaac VSCode executor returned an empty response")
         return response.decode("utf-8", errors="replace")
 
-    def _with_camera_environment(self, source: str) -> str:
+    def _with_camera_environment(
+        self,
+        source: str,
+        *,
+        reload_modules: bool = True,
+    ) -> str:
         camera_directory = repr(str(self.camera_directory))
         project_root = str(self.project_root)
         bridge_root = str(self.project_root / "aura_hardware" / "aura_isaac_bridge")
-        prelude = (
+        module_reload = (
             "import os\n"
             "import sys\n"
             "import importlib\n"
@@ -224,6 +230,13 @@ class IsaacRuntimeLauncher:
             "import gc\n"
             "gc.collect()\n"
             "importlib.invalidate_caches()\n"
+        ) if reload_modules else (
+            "import os\n"
+            "_previous_camera_bridge = globals().get('camera_bridge')\n"
+            "if _previous_camera_bridge is not None and hasattr(_previous_camera_bridge, 'stop'):\n"
+            "    _previous_camera_bridge.stop()\n"
+        )
+        prelude = module_reload + (
             f"os.environ['AURA_VLA_ROOT'] = {project_root!r}\n"
             f"os.environ['AURA_ISAAC_BRIDGE_ROOT'] = {bridge_root!r}\n"
             f"os.environ['AURA_CAMERA_DIR'] = {camera_directory}\n"

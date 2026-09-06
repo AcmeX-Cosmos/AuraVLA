@@ -24,7 +24,8 @@ from aura_isaac_bridge.core.state import (
     BANANA_GRASP_TILT_RAD, BANANA_NEAR_SIDE_OFFSET,
     BANANA_MIN_SHORT_AXIS_ALIGNMENT,
     DACH_GRASP_HEIGHT_OFFSET, DACH_GRASP_YAW_OFFSET_RAD,
-    MAX_GRASP_APPROACH_TILT_RAD, TARGET_GRASP_APPROACH_TILT_RAD,
+    MAX_GRASP_APPROACH_TILT_RAD, CAN_MAX_GRASP_APPROACH_TILT_RAD,
+    TARGET_GRASP_APPROACH_TILT_RAD,
     GRASP_REFINEMENT_STEPS, GRIPPER_CLOSE_FRAMES,
     GRIPPER_MAX_EFFORT, GRIPPER_STIFFNESS, GRIPPER_DAMPING,
     GRIPPER_CONTACT_RESIDUAL, GRIPPER_CONTACT_FORCE_THRESHOLD,
@@ -57,6 +58,7 @@ from aura_isaac_bridge.core.state import (
     DUAL_ARM_MIN_TCP_SEPARATION,
 )
 from aura_isaac_bridge.core.physics import step_app, ensure_pickable_object
+from aura_isaac_bridge.core.gripper_contact import classify_finger_contacts
 from aura_isaac_bridge.core.perception import (
     get_sim_pose,
     quat_rotate,
@@ -97,7 +99,7 @@ from aura_isaac_bridge.core.motion import (
     get_object_gripper_containment,
     get_gripper_table_clearance,
     get_gripper_table_contact_safe_clearance,
-    get_gripper_closing_axis,
+    get_gripper_closing_axis, get_gripper_closing_axis_3d,
     get_gripper_inner_opening_width,
     get_gripper_center_local_offset,
     get_tcp_target_for_gripper_center,
@@ -216,16 +218,21 @@ def get_human_tabletop_approach_direction(object_position):
 
 def get_top_down_grasp_orientation(object_name, target_prim, tilt_override=None):
     canonical_name = state.SCENE_NAME_RESOLVER.canonicalize(object_name)
+    maximum_tilt = (
+        CAN_MAX_GRASP_APPROACH_TILT_RAD
+        if canonical_name in {"master_chef_can", "tomato_soup_can"}
+        else MAX_GRASP_APPROACH_TILT_RAD
+    )
     requested_tilt = (
         BANANA_GRASP_TILT_RAD
         if tilt_override is None and canonical_name == "banana"
         else float(tilt_override or 0.0)
     )
-    tilt = float(np.clip(requested_tilt, 0.0, MAX_GRASP_APPROACH_TILT_RAD))
+    tilt = float(np.clip(requested_tilt, 0.0, maximum_tilt))
     if abs(tilt - requested_tilt) > 1e-9:
         print(
             f"🛡️ {canonical_name} 抓取倾角限制为 "
-            f"{np.degrees(MAX_GRASP_APPROACH_TILT_RAD):.1f}°，"
+            f"{np.degrees(maximum_tilt):.1f}°，"
             f"requested={np.degrees(requested_tilt):.1f}°"
         )
 
@@ -983,6 +990,11 @@ def execute_pick_place(object_name, target_name):
     task_started = time.perf_counter()
 
     canonical_object_name = state.SCENE_NAME_RESOLVER.canonicalize(object_name)
+    maximum_grasp_tilt = (
+        CAN_MAX_GRASP_APPROACH_TILT_RAD
+        if canonical_object_name in {"master_chef_can", "tomato_soup_can"}
+        else MAX_GRASP_APPROACH_TILT_RAD
+    )
     object_prim_path = resolve_scene_prim_path(object_name)
     state.TARGET_OBJECT_PRIM_PATH = object_prim_path
     target_prim = SingleXFormPrim(
@@ -1079,7 +1091,11 @@ def execute_pick_place(object_name, target_name):
         f"required={required_opening_width:.4f} m"
     )
     if required_opening_width > gripper_opening_width:
-        message = "object is wider than the physical gripper opening"
+        message = (
+            f"object width {minimum_object_width * 1000:.1f} mm exceeds "
+            f"single-arm gripper opening {gripper_opening_width * 1000:.1f} mm; "
+            "use a bimanual grasp or a wider tool"
+        )
         return {
             "success": False,
             "message": message,
@@ -1507,7 +1523,7 @@ def execute_pick_place(object_name, target_name):
         for inward_tilt_deg in (
             0.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0,
         ):
-            if np.radians(inward_tilt_deg) > MAX_GRASP_APPROACH_TILT_RAD:
+            if np.radians(inward_tilt_deg) > maximum_grasp_tilt:
                 continue
             base_candidate_orientation = get_top_down_grasp_orientation(
                 object_name,
@@ -1515,7 +1531,8 @@ def execute_pick_place(object_name, target_name):
                 tilt_override=np.radians(inward_tilt_deg),
             )
             roll_candidates = (
-                (-30.0, -20.0, -10.0, 0.0, 10.0, 20.0, 30.0)
+                (0.0, -15.0, 15.0, -30.0, 30.0, -45.0, 45.0,
+                 -60.0, 60.0, -75.0, 75.0, -90.0, 90.0)
                 if canonical_object_name in {
                     "master_chef_can",
                     "tomato_soup_can",
@@ -1533,6 +1550,23 @@ def execute_pick_place(object_name, target_name):
                         if opposite_tool_branch
                         else rolled_orientation
                     )
+                    if canonical_object_name in {
+                        "master_chef_can",
+                        "tomato_soup_can",
+                    }:
+                        candidate_closing_axis = quat_to_rot_matrix(
+                            candidate_orientation
+                        )[:, 1]
+                        _, _, candidate_closing_width = get_mesh_extent_along_axis(
+                            get_current_stage(),
+                            object_prim_path,
+                            candidate_closing_axis,
+                        )
+                        if (
+                            candidate_closing_width + aperture_margin
+                            > gripper_opening_width
+                        ):
+                            continue
                     candidate_tcp = get_tcp_target_for_gripper_center(
                         object_position,
                         candidate_orientation,
@@ -1716,7 +1750,11 @@ def execute_pick_place(object_name, target_name):
         # to trade a small jaw-axis error for a downward, IK-reachable pose.
         # This remains a physical alignment check; it is not an attachment
         # or pose override.
-        else math.cos(math.radians(15.0))
+        else (
+            0.0
+            if canonical_object_name in {"master_chef_can", "tomato_soup_can"}
+            else math.cos(math.radians(15.0))
+        )
     )
     physical_alignment = float(
         abs(
@@ -1755,7 +1793,7 @@ def execute_pick_place(object_name, target_name):
             # rejecting a reachable tabletop entry pose.
             desired_closing_axis=desired_closing_axis,
             minimum_closing_alignment=alignment_threshold,
-            maximum_approach_tilt_rad=MAX_GRASP_APPROACH_TILT_RAD,
+            maximum_approach_tilt_rad=maximum_grasp_tilt,
         )
         print(
             "🧭 非香蕉物体在悬停高度收敛到已选抓取姿态: "
@@ -1884,7 +1922,7 @@ def execute_pick_place(object_name, target_name):
         "✅ 下探前夹爪已张开到物理最大开口: "
         f"jaw={state.dach_arm.gripper.get_joint_positions()}"
     )
-    live_closing_axis_3d = get_gripper_closing_axis()
+    live_closing_axis_3d = get_gripper_closing_axis_3d()
     gripper_opening_width = float(get_gripper_inner_opening_width())
     if canonical_object_name == "banana":
         _, object_closing_width = (
@@ -1915,7 +1953,11 @@ def execute_pick_place(object_name, target_name):
     )
     if required_opening_width > gripper_opening_width:
         move_robot_home(frames=90)
-        message = "object is wider than the physical gripper opening"
+        message = (
+            f"object minimum grasp width {minimum_object_width * 1000:.1f} mm exceeds "
+            f"single-arm gripper opening {gripper_opening_width * 1000:.1f} mm; "
+            "use a bimanual grasp or a wider tool"
+        )
         return {
             "success": False,
             "message": message,
@@ -1924,9 +1966,12 @@ def execute_pick_place(object_name, target_name):
             "physical_constraint": {
                 "gripper_opening_m": gripper_opening_width,
                 "object_width_on_closing_axis_m": float(object_closing_width),
+                "minimum_object_grasp_width_m": float(minimum_object_width),
                 "required_opening_m": required_opening_width,
                 "safety_margin_m": aperture_margin,
             },
+            "reachability_precheck": reachability,
+            "grasp_fusion": grasp_fusion,
         }
     banana_closed_center_offset = np.zeros(2, dtype=float)
     if canonical_object_name == "banana":
@@ -2115,7 +2160,7 @@ def execute_pick_place(object_name, target_name):
         # wrist while leaving the finger center far from the USD object.
         orientation=grasp_motion_orientation,
         gripper_positions=gripper_open_target,
-        maximum_approach_tilt_rad=MAX_GRASP_APPROACH_TILT_RAD,
+        maximum_approach_tilt_rad=maximum_grasp_tilt,
     )
     if not approach_result["success"]:
         move_robot_home(frames=90)
@@ -2797,6 +2842,7 @@ def execute_pick_place(object_name, target_name):
             planned_path = plan_collision_free_keyposes(
                 fallback_keyposes,
                 orientation=transport_orientation,
+                maximum_approach_tilt_rad=maximum_grasp_tilt,
             )
             attempt["segments"] = list(
                 getattr(state, "last_collision_free_keypose_diagnostics", [])
@@ -2969,6 +3015,7 @@ def execute_pick_place(object_name, target_name):
             replanned_route = plan_collision_free_keyposes(
                 [replanned_target_clear],
                 orientation=transport_orientation,
+                maximum_approach_tilt_rad=maximum_grasp_tilt,
             )
             if replanned_route is None:
                 tracking_event["state"] = "replan_failed"
@@ -3026,14 +3073,14 @@ def execute_pick_place(object_name, target_name):
                 0.0,
             )
             carry_efforts = get_gripper_joint_efforts()
-            effort_feedback_available = bool(np.all(np.isfinite(carry_efforts)))
-            carry_contact_confirmed = bool(
-                np.all(carry_efforts >= GRIPPER_CONTACT_FORCE_THRESHOLD)
-                if effort_feedback_available
-                else np.all(
-                    carry_residuals >= GRIPPER_CONTACT_PRELOAD_RESIDUAL
-                )
+            carry_finger_contacts = classify_finger_contacts(
+                carry_feedback,
+                gripper_close_target,
+                carry_efforts,
+                residual_threshold=GRIPPER_CONTACT_PRELOAD_RESIDUAL,
+                force_threshold=GRIPPER_CONTACT_FORCE_THRESHOLD,
             )
+            carry_contact_confirmed = bool(np.all(carry_finger_contacts))
             carry_geometry_retained = bool(
                 abs(carry_payload_containment["axial_error_m"])
                 <= carry_payload_containment["axial_limit_m"]
@@ -3051,6 +3098,7 @@ def execute_pick_place(object_name, target_name):
                     "gripper_target": gripper_close_target.tolist(),
                     "gripper_residuals_m": carry_residuals.tolist(),
                     "gripper_efforts_n": carry_efforts.tolist(),
+                    "finger_contacts": carry_finger_contacts.tolist(),
                 }
             )
             carry_ok = bool(carry_payload_containment["retained"])
@@ -3095,9 +3143,15 @@ def execute_pick_place(object_name, target_name):
                 gripper_positions=gripper_open_target,
             )
         move_robot_home(frames=90)
+        if carry_payload_containment is not None:
+            carry_failure_message = "payload retention check failed during carry"
+        elif carry_planned_path is not None:
+            carry_failure_message = "carry trajectory execution failed"
+        else:
+            carry_failure_message = "collision-clearance carry path is unreachable"
         return {
             "success": False,
-            "message": "collision-clearance carry path is unreachable",
+            "message": carry_failure_message,
             "object_name": str(object_name),
             "target_name": str(target_name),
             "returned_to_source_before_release": returned_to_source,
@@ -3379,6 +3433,7 @@ def execute_pick_place(object_name, target_name):
         "message": "pick and place completed" if success else "object did not reach target region",
         "object_name": str(object_name),
         "target_name": str(target_name),
+        "selected_arm": reachability.get("selected_arm"),
         "grasp_strategy": grasp_strategy,
         "grasp_approach": approach_result,
         "path_strategy": carry_path_strategy,

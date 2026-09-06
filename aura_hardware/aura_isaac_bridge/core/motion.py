@@ -35,6 +35,7 @@ from aura_isaac_bridge.core.state import (
     DUAL_ARM_MIN_TCP_SEPARATION,
 )
 from aura_isaac_bridge.core.physics import step_app, cleanup_debug_markers
+from aura_isaac_bridge.core.gripper_contact import classify_finger_contacts
 from aura_isaac_bridge.robot.dach_tron2a import LEFT_ARM_HOME, RIGHT_ARM_HOME
 from aura_isaac_bridge.robot.motion_planner import minimum_jerk, SparseKeyposeDiffuser, DiffusionConfig
 from aura_isaac_bridge.core.perception import (
@@ -44,6 +45,9 @@ from aura_isaac_bridge.core.perception import (
     quat_rotate,
 )
 from aura_isaac_bridge.utils.path_visualization import render_joint_path
+
+
+PATH_TILT_NUMERICAL_TOLERANCE_RAD = math.radians(0.5)
 
 
 def quat_normalize(quat):
@@ -354,17 +358,26 @@ def get_gripper_table_contact_safe_clearance():
     return max(configured_clearance, physx_clearance)
 
 
-def get_gripper_closing_axis():
+def get_gripper_closing_axis_3d():
     left_position, _, _ = get_sim_pose(state.left_finger)
     right_position, _, _ = get_sim_pose(state.right_finger)
     closing_axis = (
         np.asarray(right_position, dtype=float)
         - np.asarray(left_position, dtype=float)
     )
-    closing_axis[2] = 0.0
     closing_axis_norm = np.linalg.norm(closing_axis)
     if closing_axis_norm < 1e-6:
         raise RuntimeError("无法从指尖位姿计算夹爪闭合轴")
+    return closing_axis / closing_axis_norm
+
+
+def get_gripper_closing_axis():
+    """Return the horizontal jaw axis used by tabletop alignment checks."""
+    closing_axis = get_gripper_closing_axis_3d()
+    closing_axis[2] = 0.0
+    closing_axis_norm = np.linalg.norm(closing_axis)
+    if closing_axis_norm < 1e-6:
+        raise RuntimeError("夹爪闭合轴接近竖直，无法计算水平对齐方向")
     return closing_axis / closing_axis_norm
 
 
@@ -372,7 +385,7 @@ def get_gripper_inner_opening_width():
     """Measure the free gap between the two live jaw collision boxes."""
     left_corners = get_finger_collision_world_corners(state.left_finger, "left")
     right_corners = get_finger_collision_world_corners(state.right_finger, "right")
-    closing_axis = get_gripper_closing_axis()
+    closing_axis = get_gripper_closing_axis_3d()
     left_projection = left_corners @ closing_axis
     right_projection = right_corners @ closing_axis
     left_center = float(np.mean(left_projection))
@@ -947,7 +960,11 @@ def plan_ee_waypoints_with_spacing(
     return list(points), joint_targets
 
 
-def plan_collision_free_keyposes(keyposes, orientation=None):
+def plan_collision_free_keyposes(
+    keyposes,
+    orientation=None,
+    maximum_approach_tilt_rad=None,
+):
     state.last_collision_free_keypose_diagnostics = []
     if state.controller.rrt is None:
         print("🛑 Lula RRT 不可用；拒绝执行未验证碰撞的关键姿态路径")
@@ -959,6 +976,11 @@ def plan_collision_free_keyposes(keyposes, orientation=None):
     joint_targets = []
     current_orientation = (
         None if orientation is None else quat_normalize(orientation)
+    )
+    tilt_limit = (
+        MAX_GRASP_APPROACH_TILT_RAD
+        if maximum_approach_tilt_rad is None
+        else float(maximum_approach_tilt_rad)
     )
     for keypose_index, keypose in enumerate(sparse_keyposes, start=1):
         diagnostic = {
@@ -985,15 +1007,16 @@ def plan_collision_free_keyposes(keyposes, orientation=None):
             diagnostic["max_downward_tilt_deg"] = math.degrees(
                 path_downward_tilt
             )
+            permitted_tilt = tilt_limit + PATH_TILT_NUMERICAL_TOLERANCE_RAD
             if (
-                path_tilt_error > MAX_GRASP_APPROACH_TILT_RAD
-                or path_downward_tilt > MAX_GRASP_APPROACH_TILT_RAD
+                path_tilt_error > permitted_tilt
+                or path_downward_tilt > permitted_tilt
             ):
                 print(
                     f"↪️ sparse keypose {keypose_index}: RRT 中途倾斜偏差 "
                     f"relative={math.degrees(path_tilt_error):.1f}°, "
                     f"absolute={math.degrees(path_downward_tilt):.1f}° > "
-                    f"{math.degrees(MAX_GRASP_APPROACH_TILT_RAD):.1f}°，"
+                    f"{math.degrees(tilt_limit):.1f}°，"
                     "拒绝执行该路径"
                 )
                 segment = None
@@ -1020,14 +1043,17 @@ def plan_collision_free_keyposes(keyposes, orientation=None):
                     diagnostic["cspace_tilt_error_deg"] = math.degrees(
                         path_tilt_error
                     )
-                    if path_tilt_error <= MAX_GRASP_APPROACH_TILT_RAD:
+                    permitted_tilt = (
+                        tilt_limit + PATH_TILT_NUMERICAL_TOLERANCE_RAD
+                    )
+                    if path_tilt_error <= permitted_tilt:
                         path_downward_tilt = _max_path_downward_tilt(
                             candidate_segment
                         )
                         diagnostic["max_downward_tilt_deg"] = math.degrees(
                             path_downward_tilt
                         )
-                        if path_downward_tilt <= MAX_GRASP_APPROACH_TILT_RAD:
+                        if path_downward_tilt <= permitted_tilt:
                             segment = candidate_segment
                             diagnostic["cspace_rrt"] = True
                             print(
@@ -1737,12 +1763,12 @@ def close_gripper_slowly(
     # One DACH jaw can report a near-zero effort while its position drive is
     # visibly blocked by the object; discarding that residual whenever the
     # effort array exists creates a false one-finger failure.
-    final_finger_contacts = final_opening_ready & (
-        (final_residuals >= GRIPPER_CONTACT_PRELOAD_RESIDUAL)
-        | (
-            np.isfinite(final_efforts)
-            & (final_efforts >= GRIPPER_CONTACT_FORCE_THRESHOLD)
-        )
+    final_finger_contacts = final_opening_ready & classify_finger_contacts(
+        final_feedback,
+        hold_target,
+        final_efforts,
+        residual_threshold=GRIPPER_CONTACT_PRELOAD_RESIDUAL,
+        force_threshold=GRIPPER_CONTACT_FORCE_THRESHOLD,
     )
     contact_confirmed = bool(np.all(final_finger_contacts))
     return {
@@ -1798,6 +1824,14 @@ def open_gripper_slowly(
         settled_frames = settled_frames + 1 if open_error <= 0.001 else 0
         if settled_frames >= 3:
             break
+    # The commanded prismatic jaw joints can report convergence before the
+    # coupled visual/collision linkage reaches the same aperture. Keep the
+    # terminal command active briefly so geometry-based width checks observe
+    # the actual fully-open fingers instead of a transient narrow gap.
+    for _ in range(30):
+        state.dach_arm.gripper.set_joint_positions(target_positions)
+        hold_ee_target(hold_position, orientation)
+        step_app()
     final_error = float(np.max(np.abs(final_feedback - target_positions)))
     print(
         f"✋ 夹爪张开收敛: feedback={final_feedback}, "

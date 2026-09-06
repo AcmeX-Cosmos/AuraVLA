@@ -242,6 +242,9 @@ GRASPNET_FUSION_MIN_CONFIDENCE = float(
 # may override these values from config, but standalone runtime defaults must
 # keep the same conservative posture constraint.
 MAX_GRASP_APPROACH_TILT_RAD = np.radians(float(os.environ.get("AURA_MAX_GRASP_APPROACH_TILT_DEG", "15.0")))
+CAN_MAX_GRASP_APPROACH_TILT_RAD = np.radians(
+    float(os.environ.get("AURA_CAN_MAX_GRASP_APPROACH_TILT_DEG", "30.0"))
+)
 TARGET_GRASP_APPROACH_TILT_RAD = np.radians(float(os.environ.get("AURA_TARGET_GRASP_APPROACH_TILT_DEG", "10.0")))
 GRASP_REFINEMENT_STEPS = max(int(os.environ.get("AURA_GRASP_REFINEMENT_STEPS", "0")), 0)
 BANANA_GRIPPER_CLOSE_POSITION = float(os.environ.get("AURA_BANANA_GRIPPER_CLOSE_POSITION", "0.0"))
