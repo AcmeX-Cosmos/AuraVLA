@@ -34,27 +34,11 @@ if [ -n "$CONDA_DEFAULT_ENV" ]; then
     echo ""
 fi
 
-# Load NVIDIA API key from config.yaml if not already set
-if [ -z "$NVIDIA_API_KEY" ]; then
-    if [ -f "$CONFIG_FILE" ]; then
-        echo "📄 Loading configuration from: $CONFIG_FILE"
-        # Extract API key from YAML (remove "Bearer " prefix if present)
-        API_KEY=$(grep -A 1 "^nvidia:" "$CONFIG_FILE" | grep "api_key:" | sed 's/.*api_key: *"\{0,1\}//' | sed 's/"\{0,1\} *$//' | sed 's/^Bearer *//')
-        if [ -n "$API_KEY" ]; then
-            export NVIDIA_API_KEY="$API_KEY"
-            echo "✓ NVIDIA API key loaded from config"
-        else
-            echo "⚠️  Warning: Could not extract API key from config.yaml"
-        fi
-    else
-        echo "⚠️  Warning: Config file not found: $CONFIG_FILE"
-    fi
-    echo ""
-fi
-
-if [ -z "$NVIDIA_API_KEY" ]; then
+# API credentials must be injected through the environment, never read from
+# a tracked configuration file.
+if [ -z "$NVIDIA_API_KEY" ] && [ -z "$NVIDIA_API_KEYS" ]; then
     echo "⚠️  Warning: NVIDIA_API_KEY not set"
-    echo "   VLM features may not work without API key"
+    echo "   Set NVIDIA_API_KEY or NVIDIA_API_KEYS before launching"
     echo ""
     read -p "Continue anyway? (y/N): " -n 1 -r
     echo

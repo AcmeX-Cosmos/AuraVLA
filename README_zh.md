@@ -203,6 +203,11 @@ source install/setup.bash
 ```bash
 # 必需：VLM的NVIDIA API密钥
 export NVIDIA_API_KEY="your_nvidia_api_key_here"
+
+# 密钥不会写入 config.yaml。本地使用时：
+cp aura_bringup/config/nvidia.env.example aura_bringup/config/nvidia.local.env
+# 在 nvidia.local.env 中填写密钥，然后加载到当前 shell。
+set -a; source aura_bringup/config/nvidia.local.env; set +a
 ```
 
 ### 启动系统

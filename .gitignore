@@ -20,6 +20,15 @@ dist/
 # Temp
 *.tmp
 *.log
+.env
+.env.*
+!.env.example
+
+# Local credentials and generated runtime configuration
+*.local.yaml
+*.local.yml
+*.local.json
+*.local.env
 
 .vscode/
 

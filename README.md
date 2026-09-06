@@ -222,6 +222,11 @@ source install/setup.bash
 ```bash
 # Required: NVIDIA API key for VLM
 export NVIDIA_API_KEY="your_nvidia_api_key_here"
+
+# The key is intentionally kept outside config.yaml. For local use:
+cp aura_bringup/config/nvidia.env.example aura_bringup/config/nvidia.local.env
+# Edit nvidia.local.env locally, then load it into the current shell.
+set -a; source aura_bringup/config/nvidia.local.env; set +a
 ```
 
 ### Launch System
