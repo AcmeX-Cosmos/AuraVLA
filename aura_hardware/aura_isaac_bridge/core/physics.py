@@ -18,6 +18,8 @@ from aura_isaac_bridge.core.state import (
     BANANA_STATIC_FRICTION, BANANA_DYNAMIC_FRICTION,
     GRIPPER_STATIC_FRICTION, GRIPPER_DYNAMIC_FRICTION,
     PHYSX_CONTACT_OFFSET, PHYSX_REST_OFFSET,
+    GRIPPER_CONTACT_OFFSET, GRIPPER_REST_OFFSET,
+    PRECISION_OBJECT_CONTACT_OFFSET, PRECISION_OBJECT_REST_OFFSET,
     PHYSX_SOLVER_POSITION_ITERATIONS, PHYSX_SOLVER_VELOCITY_ITERATIONS,
     PHYSX_MAX_DEPENETRATION_VELOCITY,
     PHYSX_ENABLE_CCD,
@@ -221,6 +223,11 @@ def ensure_pickable_object(stage, prim_path):
         PHYSX_MAX_DEPENETRATION_VELOCITY
     )
 
+    canonical_name = state.SCENE_NAME_RESOLVER.canonicalize(prim_path)
+    use_convex_hull = canonical_name in {
+        "master_chef_can",
+        "tomato_soup_can",
+    }
     collider_count = 0
     for prim in Usd.PrimRange(root):
         if prim.IsA(UsdGeom.Mesh):
@@ -231,7 +238,9 @@ def ensure_pickable_object(stage, prim_path):
                 if prim.HasAPI(UsdPhysics.MeshCollisionAPI)
                 else UsdPhysics.MeshCollisionAPI.Apply(prim)
             )
-            mesh_collision.GetApproximationAttr().Set("convexDecomposition")
+            mesh_collision.GetApproximationAttr().Set(
+                "convexHull" if use_convex_hull else "convexDecomposition"
+            )
             # Replace coarse source-asset hull settings with a close-fitting
             # decomposition. ShrinkWrap is important for narrow jaw contact.
             for schema in (
@@ -243,19 +252,42 @@ def ensure_pickable_object(stage, prim_path):
                         prim.RemoveAPI(schema)
                     except Exception:
                         pass
-            decomposition = PhysxSchema.PhysxConvexDecompositionCollisionAPI.Apply(prim)
-            decomposition.CreateHullVertexLimitAttr().Set(PHYSX_CONVEX_HULL_VERTEX_LIMIT)
-            decomposition.CreateMaxConvexHullsAttr().Set(PHYSX_CONVEX_MAX_HULLS)
-            decomposition.CreateMinThicknessAttr().Set(PHYSX_CONVEX_MIN_THICKNESS)
-            decomposition.CreateShrinkWrapAttr().Set(PHYSX_CONVEX_SHRINK_WRAP)
-            decomposition.CreateErrorPercentageAttr().Set(PHYSX_CONVEX_ERROR_PERCENTAGE)
+            if not use_convex_hull:
+                decomposition = (
+                    PhysxSchema.PhysxConvexDecompositionCollisionAPI.Apply(prim)
+                )
+                decomposition.CreateHullVertexLimitAttr().Set(
+                    PHYSX_CONVEX_HULL_VERTEX_LIMIT
+                )
+                decomposition.CreateMaxConvexHullsAttr().Set(
+                    PHYSX_CONVEX_MAX_HULLS
+                )
+                decomposition.CreateMinThicknessAttr().Set(
+                    PHYSX_CONVEX_MIN_THICKNESS
+                )
+                decomposition.CreateShrinkWrapAttr().Set(
+                    PHYSX_CONVEX_SHRINK_WRAP
+                )
+                decomposition.CreateErrorPercentageAttr().Set(
+                    PHYSX_CONVEX_ERROR_PERCENTAGE
+                )
             physx_collision = (
                 PhysxSchema.PhysxCollisionAPI(prim)
                 if prim.HasAPI(PhysxSchema.PhysxCollisionAPI)
                 else PhysxSchema.PhysxCollisionAPI.Apply(prim)
             )
-            physx_collision.CreateContactOffsetAttr().Set(PHYSX_CONTACT_OFFSET)
-            physx_collision.CreateRestOffsetAttr().Set(PHYSX_REST_OFFSET)
+            object_contact_offset = (
+                PRECISION_OBJECT_CONTACT_OFFSET
+                if use_convex_hull
+                else PHYSX_CONTACT_OFFSET
+            )
+            object_rest_offset = (
+                PRECISION_OBJECT_REST_OFFSET
+                if use_convex_hull
+                else PHYSX_REST_OFFSET
+            )
+            physx_collision.CreateContactOffsetAttr().Set(object_contact_offset)
+            physx_collision.CreateRestOffsetAttr().Set(object_rest_offset)
             bind_grasp_physics_material(prim, material)
             collider_count += 1
 
@@ -265,6 +297,7 @@ def ensure_pickable_object(stage, prim_path):
 
     print(
         f"✅ {prim_path} 碰撞体数量: {collider_count}, "
+        f"approximation={'convexHull' if use_convex_hull else 'convexDecomposition'}, "
         f"mass=0.05kg, CCD={'on' if PHYSX_ENABLE_CCD else 'off'}, contact/rest="
         f"{PHYSX_CONTACT_OFFSET:.4f}/{PHYSX_REST_OFFSET:.4f}m"
     )
@@ -371,8 +404,8 @@ def configure_dach_contact_physics(stage, *, active_arm=None, left_arm=None, rig
                 if prim.HasAPI(PhysxSchema.PhysxCollisionAPI)
                 else PhysxSchema.PhysxCollisionAPI.Apply(prim)
             )
-            collision_api.CreateContactOffsetAttr().Set(PHYSX_CONTACT_OFFSET)
-            collision_api.CreateRestOffsetAttr().Set(PHYSX_REST_OFFSET)
+            collision_api.CreateContactOffsetAttr().Set(GRIPPER_CONTACT_OFFSET)
+            collision_api.CreateRestOffsetAttr().Set(GRIPPER_REST_OFFSET)
             bind_grasp_physics_material(prim, finger_material)
             configured_colliders += 1
 

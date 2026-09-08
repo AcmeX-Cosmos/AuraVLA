@@ -413,6 +413,29 @@ def get_current_bbox_center(stage, target_prim, prim_path=None):
     sim_max = np.max(sim_corners, axis=0)
     return (sim_min + sim_max) * 0.5, sim_min, sim_max
 
+
+def get_current_mesh_horizontal_min_width_axis(stage, target_prim, prim_path=None):
+    """Return the live horizontal minimum-width axis after PhysX motion."""
+    prim_path = str(prim_path or target_prim.prim_path)
+    usd_axis = get_mesh_horizontal_min_width_axis(stage, prim_path)
+    _, usd_position, _, _ = _get_usd_to_sim_geometry_transform(target_prim)
+    usd_points = np.asarray(
+        [
+            usd_position,
+            usd_position + np.array([usd_axis[0], usd_axis[1], 0.0]),
+        ],
+        dtype=float,
+    )
+    sim_points = transform_usd_world_points_to_sim(target_prim, usd_points)
+    sim_axis = np.asarray(sim_points[1, :2] - sim_points[0, :2], dtype=float)
+    axis_norm = float(np.linalg.norm(sim_axis))
+    if axis_norm < 1e-9:
+        raise RuntimeError("物体实时最窄方向接近竖直，无法用于桌面夹取")
+    sim_axis /= axis_norm
+    if sim_axis[int(np.argmax(np.abs(sim_axis)))] < 0.0:
+        sim_axis = -sim_axis
+    return sim_axis
+
 def get_current_mesh_horizontal_cross_section_center(
     stage,
     target_prim,

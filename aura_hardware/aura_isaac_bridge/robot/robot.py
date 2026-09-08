@@ -21,7 +21,7 @@ from isaacsim.core.prims import SingleXFormPrim
 from isaacsim.core.simulation_manager import SimulationManager
 from isaacsim.core.utils.prims import delete_prim
 from isaacsim.core.utils.rotations import euler_angles_to_quat, quat_to_rot_matrix, rot_matrix_to_quat
-from isaacsim.core.utils.stage import get_current_stage
+from isaacsim.core.utils.stage import get_current_stage, open_stage, update_stage
 from isaacsim.core.utils.types import ArticulationAction
 
 # ── Bootstrap: load AuraVLA packages from the workspace ──────────
@@ -56,6 +56,7 @@ def _load_aura_runtime_config() -> None:
     planner = settings.get("planner") or {}
     camera = settings.get("camera") or {}
     perception = settings.get("perception") or {}
+    isaac = settings.get("isaac") or {}
     grasp_backend = str(perception.get("grasp_backend", "graspnet")).strip().lower()
     anygrasp_calibration = perception.get("anygrasp_calibration") or {}
     anygrasp = perception.get("anygrasp") or {}
@@ -68,6 +69,8 @@ def _load_aura_runtime_config() -> None:
             os.environ[env_name] = str(value)
 
     set_value("AURA_CAMERA_PRIM_PATH", camera.get("prim_path"))
+    if "AURA_STAGE_PATH" not in os.environ:
+        set_value("AURA_STAGE_PATH", isaac.get("stage_path"))
     if "AURA_GRASP_BACKEND" not in os.environ:
         set_value("AURA_GRASP_BACKEND", grasp_backend)
     set_value("AURA_DACH_ARM_SIDE", str(robot.get("arm_side", "right")).lower())
@@ -134,6 +137,16 @@ def _load_aura_runtime_config() -> None:
         "AURA_GRIPPER_DYNAMIC_FRICTION": ("gripper_dynamic_friction", 5.0),
         "AURA_PHYSX_CONTACT_OFFSET": ("physx_contact_offset_m", 0.003),
         "AURA_PHYSX_REST_OFFSET": ("physx_rest_offset_m", 0.001),
+        "AURA_GRIPPER_CONTACT_OFFSET": ("gripper_contact_offset_m", 0.0005),
+        "AURA_GRIPPER_REST_OFFSET": ("gripper_rest_offset_m", 0.0),
+        "AURA_PRECISION_OBJECT_CONTACT_OFFSET": (
+            "precision_object_contact_offset_m",
+            0.0005,
+        ),
+        "AURA_PRECISION_OBJECT_REST_OFFSET": (
+            "precision_object_rest_offset_m",
+            0.0,
+        ),
         "AURA_PHYSX_SOLVER_POSITION_ITERATIONS": ("physx_solver_position_iterations", 32),
         "AURA_PHYSX_SOLVER_VELOCITY_ITERATIONS": ("physx_solver_velocity_iterations", 8),
         "AURA_PHYSX_MAX_DEPENETRATION_VELOCITY": ("physx_max_depenetration_velocity", 0.2),
@@ -339,8 +352,54 @@ print(f"📁 AuraVLA 项目目录: {PROJECT_ROOT}")
 print(f"📁 AnyGrasp SDK 目录: {ANYGRASP_DIR}")
 print(f"🧠 抓取感知后端: {GRASP_BACKEND}")
 
+
+def _stage_real_path(stage):
+    root_layer = stage.GetRootLayer()
+    identifier = str(getattr(root_layer, "realPath", "") or root_layer.identifier)
+    if identifier.startswith("file:"):
+        identifier = identifier[5:]
+    return str(Path(identifier).expanduser().resolve()) if identifier else ""
+
+
+def _ensure_configured_stage():
+    """Load the configured USD scene once and return the active stage."""
+    configured_path = str(os.environ.get("AURA_STAGE_PATH", "")).strip()
+    if not configured_path:
+        return get_current_stage()
+
+    stage_path = Path(configured_path).expanduser().resolve()
+    if not stage_path.is_file():
+        raise RuntimeError(f"配置的 Isaac USD 不存在: {stage_path}")
+    if not Usd.Stage.IsSupportedFile(str(stage_path)):
+        raise RuntimeError(f"配置的文件不是可加载的 USD: {stage_path}")
+
+    stage = get_current_stage()
+    if _stage_real_path(stage) == str(stage_path):
+        print(f"✅ Isaac Stage 已是配置场景: {stage_path}")
+        return stage
+
+    timeline = omni.timeline.get_timeline_interface()
+    if timeline.is_playing():
+        timeline.stop()
+    print(f"📂 正在加载 Isaac Stage: {stage_path}")
+    if not open_stage(str(stage_path)):
+        raise RuntimeError(f"Isaac 无法打开 USD 场景: {stage_path}")
+
+    for _ in range(120):
+        update_stage()
+        stage = get_current_stage()
+        if _stage_real_path(stage) == str(stage_path):
+            break
+    if _stage_real_path(stage) != str(stage_path):
+        raise RuntimeError(f"Isaac USD 加载超时: {stage_path}")
+    print(f"✅ Isaac Stage 加载完成: {stage_path}")
+    return stage
+
+
 # ── 1. SimulationContext ──────────────────────────────────────────
 print(f"📁 AnyGrasp SDK 目录: {ANYGRASP_DIR}")
+
+stage = _ensure_configured_stage()
 
 # 1. 获取/创建 SimulationContext（物理引擎核心）
 state.sim_context = SimulationContext.instance()
@@ -355,7 +414,6 @@ else:
     print("✅ 复用了现有的 SimulationContext")
 
 # 2. 确保物理场景 Prim 存在（否则物理引擎无法工作）
-stage = get_current_stage()
 state.stage = stage
 physx_prim = stage.GetPrimAtPath("/PhysicsScene")
 if not physx_prim.IsValid():

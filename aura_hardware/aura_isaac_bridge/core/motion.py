@@ -29,6 +29,7 @@ from aura_isaac_bridge.core.state import (
     GRIPPER_CONTACT_SETTLE_FRAMES, GRIPPER_PRELOAD_CONFIRM_FRAMES,
     MIN_GRIPPER_TABLE_CLEARANCE, TABLE_CLEARANCE_ABORT_MARGIN,
     PHYSX_CONTACT_OFFSET, PHYSX_REST_OFFSET,
+    GRIPPER_CONTACT_OFFSET, GRIPPER_REST_OFFSET,
     TRAJECTORY_MAX_JOINT_STEP, TRAJECTORY_MIN_FRAMES, TRAJECTORY_SETTLE_FRAMES,
     GRASP_APPROACH_MAX_JOINT_STEP, GRASP_APPROACH_MIN_FRAMES,
     ACTION_WAYPOINT_LIMIT, CARTESIAN_WAYPOINT_SPACING,
@@ -37,7 +38,12 @@ from aura_isaac_bridge.core.state import (
 from aura_isaac_bridge.core.physics import step_app, cleanup_debug_markers
 from aura_isaac_bridge.core.gripper_contact import classify_finger_contacts
 from aura_isaac_bridge.robot.dach_tron2a import LEFT_ARM_HOME, RIGHT_ARM_HOME
-from aura_isaac_bridge.robot.motion_planner import minimum_jerk, SparseKeyposeDiffuser, DiffusionConfig
+from aura_isaac_bridge.robot.motion_planner import (
+    DiffusionConfig,
+    SparseKeyposeDiffuser,
+    minimum_jerk,
+    select_continuation_start,
+)
 from aura_isaac_bridge.core.perception import (
     get_bbox_center,
     get_current_bbox_center,
@@ -351,8 +357,10 @@ def get_gripper_table_contact_safe_clearance():
         + float(TABLE_CLEARANCE_ABORT_MARGIN)
     )
     physx_clearance = (
-        2.0 * max(float(PHYSX_CONTACT_OFFSET), 0.0)
+        max(float(PHYSX_CONTACT_OFFSET), 0.0)
+        + max(float(GRIPPER_CONTACT_OFFSET), 0.0)
         + max(float(PHYSX_REST_OFFSET), 0.0)
+        + max(float(GRIPPER_REST_OFFSET), 0.0)
         + 0.001
     )
     return max(configured_clearance, physx_clearance)
@@ -634,6 +642,10 @@ def _execute_dual_joint_trajectory(
     minimum_payload_table_clearance=0.02,
     max_joint_step_rad=None,
     minimum_frames=None,
+    terminal_joint_tolerance_rad=0.005,
+    settle_at_end=True,
+    left_continuation_start=None,
+    right_continuation_start=None,
 ):
     if left_joint_targets is None:
         raise RuntimeError(f"{label}: left joint trajectory planner returned None")
@@ -641,10 +653,26 @@ def _execute_dual_joint_trajectory(
         raise RuntimeError(f"{label}: right joint trajectory planner returned None")
     execution_started = time.perf_counter()
     ensure_robot_control_ready()
-    left_start = get_left_joint_positions()
-    right_start = get_active_joint_positions()
-    if left_start is None or right_start is None:
+    left_feedback_start = get_left_joint_positions()
+    right_feedback_start = get_active_joint_positions()
+    if left_feedback_start is None or right_feedback_start is None:
         raise RuntimeError("DACH 双臂轨迹执行前无法读取有效关节状态")
+    effective_max_step = float(
+        max_joint_step_rad
+        if max_joint_step_rad is not None
+        else TRAJECTORY_MAX_JOINT_STEP
+    )
+    continuation_tolerance = max(3.0 * effective_max_step, 0.02)
+    left_start = select_continuation_start(
+        left_feedback_start,
+        left_continuation_start,
+        maximum_tracking_error_rad=continuation_tolerance,
+    )
+    right_start = select_continuation_start(
+        right_feedback_start,
+        right_continuation_start,
+        maximum_tracking_error_rad=continuation_tolerance,
+    )
     left_targets = [
         np.asarray(target, dtype=float).reshape(-1)
         for target in left_joint_targets
@@ -816,33 +844,43 @@ def _execute_dual_joint_trajectory(
 
     left_final = trajectory.left_positions[-1]
     right_final = trajectory.right_positions[-1]
-    settle_limit = max(
-        TRAJECTORY_SETTLE_FRAMES,
-        min(max(TRAJECTORY_SETTLE_FRAMES * 3, 12), 36),
-    )
+    left_feedback = get_left_joint_positions()
+    right_feedback = get_active_joint_positions()
     terminal_joint_error = float("inf")
-    for settle_index in range(settle_limit):
-        if left_gripper_positions is not None:
-            state.dach_left.gripper.set_joint_positions(left_gripper_positions)
-        if right_gripper_positions is not None:
-            state.dach_arm.gripper.set_joint_positions(right_gripper_positions)
-        state.dach_left.set_arm_joint_positions(left_final)
-        state.dach_arm.set_arm_joint_positions(right_final)
-        step_app()
-        verify_table_clearance(f"settle_frame_{settle_index + 1}")
-        left_feedback = get_left_joint_positions()
-        right_feedback = get_active_joint_positions()
-        if left_feedback is None or right_feedback is None:
-            continue
+    if left_feedback is not None and right_feedback is not None:
         terminal_joint_error = max(
             float(np.max(np.abs(left_feedback - left_final))),
             float(np.max(np.abs(right_feedback - right_final))),
         )
-        if (
-            settle_index + 1 >= TRAJECTORY_SETTLE_FRAMES
-            and terminal_joint_error <= 0.005
-        ):
-            break
+    if settle_at_end:
+        settle_limit = max(
+            TRAJECTORY_SETTLE_FRAMES,
+            min(max(TRAJECTORY_SETTLE_FRAMES * 3, 12), 36),
+        )
+        if float(terminal_joint_tolerance_rad) < 0.005:
+            settle_limit = max(settle_limit, 36)
+        for settle_index in range(settle_limit):
+            if left_gripper_positions is not None:
+                state.dach_left.gripper.set_joint_positions(left_gripper_positions)
+            if right_gripper_positions is not None:
+                state.dach_arm.gripper.set_joint_positions(right_gripper_positions)
+            state.dach_left.set_arm_joint_positions(left_final)
+            state.dach_arm.set_arm_joint_positions(right_final)
+            step_app()
+            verify_table_clearance(f"settle_frame_{settle_index + 1}")
+            left_feedback = get_left_joint_positions()
+            right_feedback = get_active_joint_positions()
+            if left_feedback is None or right_feedback is None:
+                continue
+            terminal_joint_error = max(
+                float(np.max(np.abs(left_feedback - left_final))),
+                float(np.max(np.abs(right_feedback - right_final))),
+            )
+            if (
+                settle_index + 1 >= TRAJECTORY_SETTLE_FRAMES
+                and terminal_joint_error <= float(terminal_joint_tolerance_rad)
+            ):
+                break
     print(
         f"   {label} terminal joint error: "
         f"{terminal_joint_error:.5f} rad"
@@ -874,6 +912,9 @@ def _execute_joint_trajectory(
     minimum_payload_table_clearance=0.02,
     max_joint_step_rad=None,
     minimum_frames=None,
+    terminal_joint_tolerance_rad=0.005,
+    settle_at_end=True,
+    continuation_start=None,
 ):
     if joint_targets is None:
         raise RuntimeError(f"{label}: joint trajectory planner returned None")
@@ -895,6 +936,9 @@ def _execute_joint_trajectory(
         minimum_payload_table_clearance=minimum_payload_table_clearance,
         max_joint_step_rad=max_joint_step_rad,
         minimum_frames=minimum_frames,
+        terminal_joint_tolerance_rad=terminal_joint_tolerance_rad,
+        settle_at_end=settle_at_end,
+        right_continuation_start=continuation_start,
     )
     print(f"   {label} trajectory executed: {len(targets)} planner waypoints")
     return trajectory
@@ -1210,6 +1254,7 @@ def move_ee_collision_aware_approach(
     desired_closing_axis=None,
     minimum_closing_alignment=0.0,
     maximum_approach_tilt_rad=None,
+    terminal_joint_tolerance_rad=0.005,
 ):
     if state.controller.rrt is None:
         return {
@@ -1357,6 +1402,7 @@ def move_ee_collision_aware_approach(
                 if label == "grasp_approach"
                 else None
             ),
+            terminal_joint_tolerance_rad=terminal_joint_tolerance_rad,
         )
         orientation_refined = False
         if not orientation_constrained and orientation is not None:
@@ -1436,7 +1482,7 @@ def move_ee_collision_aware_approach(
                 orientation_ready = (
                     closing_alignment >= float(minimum_closing_alignment)
                     and refined_tilt
-                    <= refinement_tilt_limit + math.radians(0.25)
+                    <= refinement_tilt_limit + PATH_TILT_NUMERICAL_TOLERANCE_RAD
                 )
                 refinement_attempts.append(
                     {
@@ -1521,7 +1567,7 @@ def move_ee_collision_aware_approach(
             and clearance >= float(os.environ.get("AURA_MIN_GRIPPER_TABLE_CLEARANCE", "0.012"))
             # Lula/PhysX feedback around an exact limit can differ by a few
             # thousandths of a degree (for example 45.006° for a 45° target).
-            and actual_tilt <= tilt_limit + math.radians(0.25)
+            and actual_tilt <= tilt_limit + PATH_TILT_NUMERICAL_TOLERANCE_RAD
             and closing_alignment >= float(minimum_closing_alignment)
         ),
         "orientation_constrained": orientation_constrained,
@@ -1562,6 +1608,7 @@ def close_gripper_slowly(
     target_close=None,
     monitor_table_clearance=False,
     maximum_contact_opening_width=None,
+    minimum_physical_opening_width=None,
 ):
     print("🤏 双指独立力反馈闭合夹爪...")
     start_positions = np.array(state.dach_arm.gripper.get_joint_positions(), dtype=float)
@@ -1589,6 +1636,7 @@ def close_gripper_slowly(
     previous_feedback = start_positions.copy()
     blocked_residuals = np.zeros_like(start_positions)
     commanded_positions = start_positions.copy()
+    geometry_limited = False
     for i in range(frames):
         linear_progress = min(1.0, (i + 1) / frames)
         alpha = float(minimum_jerk(linear_progress))
@@ -1616,21 +1664,33 @@ def close_gripper_slowly(
             commanded_positions - previous_feedback
         )
         opening_width = float(get_gripper_inner_opening_width())
-        opening_ready = (
-            maximum_contact_opening_width is None
-            or opening_width <= float(maximum_contact_opening_width)
+        if (
+            minimum_physical_opening_width is not None
+            and opening_width <= float(minimum_physical_opening_width)
+            and not np.all(contacted)
+        ):
+            geometry_limited = True
+            commanded_positions = feedback.copy()
+            hold_target = feedback.copy()
+            state.dach_arm.gripper.set_joint_positions(hold_target)
+            print(
+                "🛑 闭爪几何下限触发，禁止夹指继续穿入物体: "
+                f"opening={opening_width:.4f} m, "
+                f"minimum={float(minimum_physical_opening_width):.4f} m"
+            )
+            break
+        contact_evidence = classify_finger_contacts(
+            feedback,
+            commanded_positions,
+            measured_efforts,
+            residual_threshold=GRIPPER_CONTACT_RESIDUAL,
+            force_threshold=GRIPPER_CONTACT_FORCE_THRESHOLD,
         )
-        effort_feedback_available = np.isfinite(measured_efforts)
         contact_candidates = (
             i >= max(4, frames // 5)
-        ) & (
-            blocked_residuals >= GRIPPER_CONTACT_RESIDUAL
-        ) & (
+        ) & contact_evidence & (
             feedback_steps <= np.maximum(requested_steps * 0.5, 0.00025)
-        ) & (
-            (~effort_feedback_available)
-            | (measured_efforts >= GRIPPER_CONTACT_FORCE_THRESHOLD)
-        ) & opening_ready
+        )
         contact_streaks = np.where(
             contacted,
             contact_streaks,
@@ -1655,7 +1715,7 @@ def close_gripper_slowly(
         if monitor_table_clearance:
             clearance = float(get_gripper_table_clearance())
             abort_threshold = get_gripper_table_contact_safe_clearance()
-            if clearance < abort_threshold:
+            if clearance < abort_threshold - 0.00025:
                 state.dach_arm.gripper.set_joint_positions(start_positions)
                 step_app(2)
                 raise RuntimeError(
@@ -1682,9 +1742,13 @@ def close_gripper_slowly(
             )
     settle_start_target = commanded_positions.copy()
     hold_target = settle_start_target.copy()
-    preload_limit = np.maximum(
-        settle_start_target - GRIPPER_CONTACT_HOLD_PRELOAD,
-        target_close,
+    preload_limit = (
+        settle_start_target.copy()
+        if geometry_limited
+        else np.maximum(
+            settle_start_target - GRIPPER_CONTACT_HOLD_PRELOAD,
+            target_close,
+        )
     )
     preload_step = GRIPPER_CONTACT_HOLD_PRELOAD / max(
         GRIPPER_CONTACT_SETTLE_FRAMES,
@@ -1734,7 +1798,7 @@ def close_gripper_slowly(
         if monitor_table_clearance:
             clearance = float(get_gripper_table_clearance())
             abort_threshold = get_gripper_table_contact_safe_clearance()
-            if clearance < abort_threshold:
+            if clearance < abort_threshold - 0.00025:
                 state.dach_arm.gripper.set_joint_positions(start_positions)
                 step_app(2)
                 raise RuntimeError(
@@ -1781,6 +1845,8 @@ def close_gripper_slowly(
         "measured_efforts_n": final_efforts.copy(),
         "opening_width_m": final_opening_width,
         "maximum_contact_opening_width_m": maximum_contact_opening_width,
+        "minimum_physical_opening_width_m": minimum_physical_opening_width,
+        "geometry_limited": geometry_limited,
     }
 
 def open_gripper_slowly(

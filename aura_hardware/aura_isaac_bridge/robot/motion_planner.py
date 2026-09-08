@@ -26,6 +26,25 @@ def minimum_jerk(progress):
     return progress**3 * (10.0 - 15.0 * progress + 6.0 * progress**2)
 
 
+def select_continuation_start(
+    measured_position,
+    previous_command,
+    *,
+    maximum_tracking_error_rad: float,
+) -> np.ndarray:
+    """Keep adjacent trajectory chunks command-continuous when tracking is close."""
+    measured = np.asarray(measured_position, dtype=float).reshape(-1)
+    if previous_command is None:
+        return measured.copy()
+    commanded = np.asarray(previous_command, dtype=float).reshape(-1)
+    if commanded.shape != measured.shape or not np.all(np.isfinite(commanded)):
+        return measured.copy()
+    tracking_error = float(np.max(np.abs(measured - commanded)))
+    if tracking_error > float(maximum_tracking_error_rad):
+        return measured.copy()
+    return commanded.copy()
+
+
 class SparseKeyposeDiffuser:
     """Diffuses sparse Cartesian or joint keyposes into smooth dense paths."""
 
@@ -280,6 +299,27 @@ def container_place_candidates(
         if not any(np.linalg.norm(point - existing) < 1e-5 for existing in candidates):
             candidates.append(point)
     return np.asarray(candidates, dtype=float)
+
+
+def compute_payload_tracking_state(
+    reference_object_position,
+    reference_gripper_center,
+    current_gripper_center,
+    current_object_position,
+):
+    """Return rigid-motion expectation and the live payload offset."""
+    reference_object = np.asarray(reference_object_position, dtype=float).reshape(3)
+    reference_gripper = np.asarray(reference_gripper_center, dtype=float).reshape(3)
+    current_gripper = np.asarray(current_gripper_center, dtype=float).reshape(3)
+    current_object = np.asarray(current_object_position, dtype=float).reshape(3)
+    expected_object = (
+        reference_object + current_gripper - reference_gripper
+    )
+    tracking_error = float(
+        np.linalg.norm((current_object - expected_object)[:2])
+    )
+    object_gripper_offset = current_object - current_gripper
+    return expected_object, tracking_error, object_gripper_offset
 
 
 def shift_grasp_toward_base(

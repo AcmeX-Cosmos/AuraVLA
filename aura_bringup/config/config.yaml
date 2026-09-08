@@ -111,10 +111,15 @@ isaac:
   host: "127.0.0.1"
   port: 8226
   autostart: true
+  # Isaac Stage loaded before AuraVLA runtime initialization.
+  # Override with AURA_STAGE_PATH for another local scene.
+  stage_path: "/home/acmex/Code/Projects/AuraVLA-Isaac/Aura.usd"
 
 robot:
   arm_side: "left"
-  base_xy: [0.3, -1.0]
+  # Keep the far can's collision center inside the strict dual-contact grasp
+  # workspace; the previous y=-1.0 pose only reached its near surface.
+  base_xy: [0.3, -0.95]
   grasp_height_offset: 0.015
   grasp_yaw_offset_deg: 0.0
   grasp_min_height_fraction: 0.20
@@ -162,6 +167,12 @@ robot:
   # reports jaw contact long before the fingers visually touch the object.
   physx_contact_offset_m: 0.003
   physx_rest_offset_m: 0.001
+  # Precision offsets apply only to jaw colliders and tight-clearance cans.
+  # Static world geometry and all other objects retain the conservative values.
+  gripper_contact_offset_m: 0.0005
+  gripper_rest_offset_m: 0.0
+  precision_object_contact_offset_m: 0.0005
+  precision_object_rest_offset_m: 0.0
   physx_solver_position_iterations: 32
   physx_solver_velocity_iterations: 8
   physx_max_depenetration_velocity: 0.2
@@ -173,8 +184,10 @@ robot:
   physx_convex_error_percentage: 0.1
   path_clearance_m: 0.10
   basket_planning_margin_m: 0.03
-  trajectory_max_joint_step_rad: 0.049
-  trajectory_min_frames: 5
+  # Dense minimum-jerk sampling limits command acceleration inside each
+  # trajectory chunk instead of exposing sparse planner steps to the drives.
+  trajectory_max_joint_step_rad: 0.025
+  trajectory_min_frames: 12
   trajectory_settle_frames: 3
   grasp_approach_max_joint_step_rad: 0.009
   grasp_approach_min_frames: 30
@@ -186,10 +199,11 @@ robot:
   cartesian_waypoint_spacing_m: 0.04
   transport_lift_height_m: 0.16
   carry_cartesian_waypoint_spacing_m: 0.12
-  carry_max_joint_step_rad: 0.016
-  carry_min_frames: 20
-  # Re-observe the held object after short route chunks. A deviation triggers
-  # a bounded Lula replan while the gripper remains closed.
+  carry_max_joint_step_rad: 0.008
+  carry_min_frames: 40
+  # Check the live Isaac payload geometry between route chunks without putting
+  # GPU inference on the motion command path. A deviation triggers a bounded
+  # Lula replan while the gripper remains closed.
   carry_replan_check_waypoints: 4
   carry_replan_position_tolerance_m: 0.02
   carry_replan_max_attempts: 3
