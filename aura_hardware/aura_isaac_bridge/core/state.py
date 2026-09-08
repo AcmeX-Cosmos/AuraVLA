@@ -151,9 +151,6 @@ DACH_JAW_COLLISION_LOCAL_BOUNDS = {
 }
 
 # ── 抓取参数 ─────────────────────────────────────────────────────
-BANANA_GRASP_TILT_RAD = np.radians(float(os.environ.get("AURA_BANANA_GRASP_TILT_DEG", "30.0")))
-BANANA_NEAR_SIDE_OFFSET = float(os.environ.get("AURA_BANANA_NEAR_SIDE_OFFSET", "0.0"))
-BANANA_MIN_SHORT_AXIS_ALIGNMENT = float(os.environ.get("AURA_BANANA_MIN_SHORT_AXIS_ALIGNMENT", "0.92"))
 GRASP_POSITION_OFFSET = np.array([0.0, 0.0, -0.01])
 GRASP_INSERT_DEPTH = 0.015
 
@@ -238,19 +235,96 @@ GRASPNET_FUSION_MIN_CONFIDENCE = float(
     np.clip(float(os.environ.get("AURA_GRASPNET_FUSION_MIN_CONFIDENCE", "0.10")), 0.0, 1.0)
 )
 
-# Desktop pick-and-place should remain predominantly top-down. The launcher
-# may override these values from config, but standalone runtime defaults must
-# keep the same conservative posture constraint.
-MAX_GRASP_APPROACH_TILT_RAD = np.radians(float(os.environ.get("AURA_MAX_GRASP_APPROACH_TILT_DEG", "15.0")))
-CAN_MAX_GRASP_APPROACH_TILT_RAD = np.radians(
-    float(os.environ.get("AURA_CAN_MAX_GRASP_APPROACH_TILT_DEG", "30.0"))
+# Desktop pick-and-place uses one conservative policy for every payload. The
+# live mesh, gripper geometry, and IK gate choose the pose; object names do not.
+MAX_GRASP_APPROACH_TILT_RAD = np.radians(
+    float(os.environ.get("AURA_MAX_GRASP_APPROACH_TILT_DEG", "15.0"))
 )
-TARGET_GRASP_APPROACH_TILT_RAD = np.radians(float(os.environ.get("AURA_TARGET_GRASP_APPROACH_TILT_DEG", "10.0")))
-GRASP_REFINEMENT_STEPS = max(int(os.environ.get("AURA_GRASP_REFINEMENT_STEPS", "0")), 0)
-BANANA_GRIPPER_CLOSE_POSITION = float(os.environ.get("AURA_BANANA_GRIPPER_CLOSE_POSITION", "0.0"))
-BANANA_PLANAR_REFINEMENT_STEPS = max(int(os.environ.get("AURA_BANANA_PLANAR_REFINEMENT_STEPS", "2")), 0)
-BANANA_PLANAR_CENTER_TOLERANCE = float(os.environ.get("AURA_BANANA_PLANAR_CENTER_TOLERANCE", "0.008"))
-BANANA_MAX_PLANAR_CORRECTION = float(os.environ.get("AURA_BANANA_MAX_PLANAR_CORRECTION", "0.04"))
+TARGET_GRASP_APPROACH_TILT_RAD = np.radians(
+    float(os.environ.get("AURA_TARGET_GRASP_APPROACH_TILT_DEG", "10.0"))
+)
+GRASP_MIN_SHORT_AXIS_ALIGNMENT = float(
+    os.environ.get("AURA_GRASP_MIN_SHORT_AXIS_ALIGNMENT", "0.92")
+)
+GRASP_APERTURE_MARGIN = max(
+    float(os.environ.get("AURA_GRASP_APERTURE_MARGIN", "0.0005")),
+    0.0,
+)
+GRASP_REFINEMENT_STEPS = max(
+    int(os.environ.get("AURA_GRASP_REFINEMENT_STEPS", "0")), 0
+)
+GRASP_PLANAR_REFINEMENT_STEPS = max(
+    int(os.environ.get("AURA_GRASP_PLANAR_REFINEMENT_STEPS", "2")), 0
+)
+GRASP_PLANAR_CENTER_TOLERANCE = max(
+    float(os.environ.get("AURA_GRASP_PLANAR_CENTER_TOLERANCE", "0.003")),
+    0.0005,
+)
+GRASP_MAX_PLANAR_CORRECTION = max(
+    float(os.environ.get("AURA_GRASP_MAX_PLANAR_CORRECTION", "0.015")),
+    0.0,
+)
+GRASP_APPROACH_ORIENTATION_KEYFRAMES = max(
+    int(os.environ.get("AURA_GRASP_APPROACH_ORIENTATION_KEYFRAMES", "10")),
+    4,
+)
+GRASP_APPROACH_ROLL_CANDIDATES_DEG = tuple(
+    float(value)
+    for value in json.loads(
+        os.environ.get(
+            "AURA_GRASP_APPROACH_ROLL_CANDIDATES_DEG_JSON",
+            "[-90,-60,-45,-30,-15,0,15,30,45,60,90]",
+        )
+    )
+)
+GRASP_CONTACT_CONFIRMATION_MARGIN = max(
+    float(
+        os.environ.get(
+            "AURA_GRASP_CONTACT_CONFIRMATION_MARGIN",
+            str(GRASP_APERTURE_MARGIN),
+        )
+    ),
+    0.0,
+)
+GRASP_MINIMUM_PHYSICAL_OPENING_MARGIN = max(
+    float(
+        os.environ.get(
+            "AURA_GRASP_MINIMUM_PHYSICAL_OPENING_MARGIN",
+            "0.0005",
+        )
+    ),
+    0.0,
+)
+GRASP_LOW_POSE_CORRECTION_LIMIT = max(
+    float(
+        os.environ.get(
+            "AURA_GRASP_LOW_POSE_CORRECTION_LIMIT",
+            str(GRASP_MAX_PLANAR_CORRECTION),
+        )
+    ),
+    0.0,
+)
+GRASP_CLEARANCE_GUARD_PAD = max(
+    float(os.environ.get("AURA_GRASP_CLEARANCE_GUARD_PAD", "0.001")),
+    0.0,
+)
+VERBOSE_MOTION_LOG = os.environ.get(
+    "AURA_VERBOSE_MOTION_LOG",
+    "0",
+).strip().lower() in {"1", "true", "yes", "on"}
+
+# Backward-compatible aliases for external launch configurations. New task
+# code must use the generic names above.
+CAN_MAX_GRASP_APPROACH_TILT_RAD = MAX_GRASP_APPROACH_TILT_RAD
+BANANA_GRASP_TILT_RAD = TARGET_GRASP_APPROACH_TILT_RAD
+BANANA_NEAR_SIDE_OFFSET = 0.0
+BANANA_MIN_SHORT_AXIS_ALIGNMENT = GRASP_MIN_SHORT_AXIS_ALIGNMENT
+BANANA_GRIPPER_CLOSE_POSITION = float(
+    os.environ.get("AURA_BANANA_GRIPPER_CLOSE_POSITION", "0.0")
+)
+BANANA_PLANAR_REFINEMENT_STEPS = GRASP_PLANAR_REFINEMENT_STEPS
+BANANA_PLANAR_CENTER_TOLERANCE = GRASP_PLANAR_CENTER_TOLERANCE
+BANANA_MAX_PLANAR_CORRECTION = GRASP_MAX_PLANAR_CORRECTION
 
 # ── 放置参数 ─────────────────────────────────────────────────────
 DIRECTIONAL_PLACE_DISTANCE = float(os.environ.get("AURA_DIRECTIONAL_PLACE_DISTANCE", "0.35"))
@@ -333,8 +407,20 @@ GRIPPER_PRELOAD_CONFIRM_FRAMES = max(
     int(os.environ.get("AURA_GRIPPER_PRELOAD_CONFIRM_FRAMES", "3")), 1
 )
 # ── 物理 / 摩擦 ──────────────────────────────────────────────────
-BANANA_STATIC_FRICTION = float(os.environ.get("AURA_BANANA_STATIC_FRICTION", "1.2"))
-BANANA_DYNAMIC_FRICTION = float(os.environ.get("AURA_BANANA_DYNAMIC_FRICTION", "1.0"))
+PICKABLE_OBJECT_STATIC_FRICTION = float(
+    os.environ.get(
+        "AURA_PICKABLE_OBJECT_STATIC_FRICTION",
+        os.environ.get("AURA_BANANA_STATIC_FRICTION", "1.2"),
+    )
+)
+PICKABLE_OBJECT_DYNAMIC_FRICTION = float(
+    os.environ.get(
+        "AURA_PICKABLE_OBJECT_DYNAMIC_FRICTION",
+        os.environ.get("AURA_BANANA_DYNAMIC_FRICTION", "1.0"),
+    )
+)
+BANANA_STATIC_FRICTION = PICKABLE_OBJECT_STATIC_FRICTION
+BANANA_DYNAMIC_FRICTION = PICKABLE_OBJECT_DYNAMIC_FRICTION
 GRIPPER_STATIC_FRICTION = float(os.environ.get("AURA_GRIPPER_STATIC_FRICTION", "6.0"))
 GRIPPER_DYNAMIC_FRICTION = float(os.environ.get("AURA_GRIPPER_DYNAMIC_FRICTION", "5.0"))
 PHYSX_CONTACT_OFFSET = float(os.environ.get("AURA_PHYSX_CONTACT_OFFSET", "0.003"))

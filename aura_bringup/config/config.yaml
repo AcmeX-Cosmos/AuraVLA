@@ -123,20 +123,25 @@ robot:
   grasp_height_offset: 0.015
   grasp_yaw_offset_deg: 0.0
   grasp_min_height_fraction: 0.20
-  banana_grasp_tilt_deg: 7.0
-  banana_near_side_offset_m: 0.0
-  # Keep the banana's projected closing width within the physical jaw
-  # aperture; 0.85 allowed the long axis to enter the grasp projection.
-  banana_min_short_axis_alignment: 0.98
+  # All payloads use the same geometry-constrained grasp policy. The live
+  # mesh selects the narrow closing axis and the planner validates reachability.
+  grasp_min_short_axis_alignment: 0.98
   min_gripper_table_clearance_m: 0.0
   table_clearance_abort_margin_m: 0.0
   basket_place_table_clearance_m: 0.003
   grasp_clearance_guard_pad_m: 0.0005
   max_grasp_approach_tilt_deg: 15.0
-  # Cylindrical cans have equivalent horizontal pinch axes and may need a
-  # steeper inward approach near the edge of the arm workspace.
-  can_max_grasp_approach_tilt_deg: 30.0
   target_grasp_approach_tilt_deg: 10.0
+  grasp_aperture_margin_m: 0.0005
+  grasp_planar_refinement_steps: 3
+  grasp_planar_center_tolerance_m: 0.003
+  grasp_max_planar_correction_m: 0.015
+  grasp_approach_orientation_keyframes: 10
+  grasp_contact_confirmation_margin_m: 0.0005
+  grasp_minimum_physical_opening_margin_m: 0.0005
+  grasp_low_pose_correction_limit_m: 0.015
+  grasp_approach_roll_candidates_deg: [-90, -60, -45, -30, -15, 0, 15, 30, 45, 60, 90]
+  verbose_motion_log: false
   # Use GraspNet first while AnyGrasp remains available as a config-selectable
   # alternative. The active backend is selected by perception.grasp_backend.
   anygrasp_required: false
@@ -153,16 +158,12 @@ robot:
   gripper_contact_force_threshold_n: 2.0
   gripper_contact_preload_residual_m: 0.0015
   gripper_contact_hold_preload_m: 0.020
-  banana_static_friction: 10.0
-  banana_dynamic_friction: 8.0
+  pickable_object_static_friction: 10.0
+  pickable_object_dynamic_friction: 8.0
   gripper_static_friction: 10.0
   gripper_dynamic_friction: 8.0
   gripper_contact_settle_frames: 60
   gripper_preload_confirm_frames: 3
-  banana_gripper_close_position: 0.0
-  banana_planar_refinement_steps: 3
-  banana_planar_center_tolerance_m: 0.008
-  banana_max_planar_correction_m: 0.05
   # Keep contact generation close to the visible collider. A 20 mm margin
   # reports jaw contact long before the fingers visually touch the object.
   physx_contact_offset_m: 0.003

@@ -15,7 +15,7 @@ from pxr import PhysxSchema, Usd, UsdGeom, UsdPhysics, UsdShade
 
 from aura_isaac_bridge.core.state import state
 from aura_isaac_bridge.core.state import (
-    BANANA_STATIC_FRICTION, BANANA_DYNAMIC_FRICTION,
+    PICKABLE_OBJECT_STATIC_FRICTION, PICKABLE_OBJECT_DYNAMIC_FRICTION,
     GRIPPER_STATIC_FRICTION, GRIPPER_DYNAMIC_FRICTION,
     PHYSX_CONTACT_OFFSET, PHYSX_REST_OFFSET,
     GRIPPER_CONTACT_OFFSET, GRIPPER_REST_OFFSET,
@@ -187,8 +187,8 @@ def ensure_pickable_object(stage, prim_path):
     material = create_grasp_physics_material(
         stage,
         material_path,
-        BANANA_STATIC_FRICTION,
-        BANANA_DYNAMIC_FRICTION,
+        PICKABLE_OBJECT_STATIC_FRICTION,
+        PICKABLE_OBJECT_DYNAMIC_FRICTION,
     )
     bind_grasp_physics_material(root, material)
 

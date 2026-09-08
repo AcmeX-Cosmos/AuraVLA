@@ -32,11 +32,15 @@ from aura_isaac_bridge.core.state import (
     GRIPPER_CONTACT_OFFSET, GRIPPER_REST_OFFSET,
     TRAJECTORY_MAX_JOINT_STEP, TRAJECTORY_MIN_FRAMES, TRAJECTORY_SETTLE_FRAMES,
     GRASP_APPROACH_MAX_JOINT_STEP, GRASP_APPROACH_MIN_FRAMES,
+    GRASP_APPROACH_ORIENTATION_KEYFRAMES, VERBOSE_MOTION_LOG,
     ACTION_WAYPOINT_LIMIT, CARTESIAN_WAYPOINT_SPACING,
     DUAL_ARM_MIN_TCP_SEPARATION,
 )
 from aura_isaac_bridge.core.physics import step_app, cleanup_debug_markers
-from aura_isaac_bridge.core.gripper_contact import classify_finger_contacts
+from aura_isaac_bridge.core.gripper_contact import (
+    classify_finger_contacts,
+    evaluate_grasp_stability,
+)
 from aura_isaac_bridge.robot.dach_tron2a import LEFT_ARM_HOME, RIGHT_ARM_HOME
 from aura_isaac_bridge.robot.motion_planner import (
     DiffusionConfig,
@@ -1424,7 +1428,11 @@ def move_ee_collision_aware_approach(
             refined_orientation = None
             warm_start = current_joints.copy()
             orientation_ready = False
-            for alpha in np.linspace(0.01, 1.0, 100):
+            for alpha in np.linspace(
+                0.01,
+                1.0,
+                GRASP_APPROACH_ORIENTATION_KEYFRAMES,
+            ):
                 candidate_orientation = (
                     (1.0 - alpha) * actual_orientation
                     + alpha * desired_orientation
@@ -1704,12 +1712,9 @@ def close_gripper_slowly(
                 target_close[newly_contacted],
             )
             print(
-                "✅ 夹指持续受力接触: "
-                f"step={i + 1}, contacted={contacted.tolist()}, "
-                f"commands={commanded_positions}, "
-                f"feedback={feedback}, residuals={blocked_residuals} m, "
-                f"efforts={measured_efforts} N, "
-                f"opening={opening_width:.4f} m"
+                "✅ 夹指接触确认: "
+                f"step={i + 1}, fingers={int(np.sum(contacted))}/"
+                f"{len(contacted)}, opening={opening_width:.4f} m"
             )
         previous_feedback = feedback.copy()
         if monitor_table_clearance:
@@ -1735,7 +1740,7 @@ def close_gripper_slowly(
                 f"feedback={feedback}, residuals={blocked_residuals} m"
             )
             break
-        if i % 15 == 0:
+        if VERBOSE_MOTION_LOG and i % 15 == 0:
             print(
                 f"   close step={i}, command={commanded_positions}, "
                 f"feedback={feedback}, residuals={blocked_residuals} m"
@@ -1788,7 +1793,9 @@ def close_gripper_slowly(
             preload_streak += 1
         else:
             preload_streak = 0
-        if settle_index % 5 == 0 or preload_streak >= 1:
+        if VERBOSE_MOTION_LOG and (
+            settle_index % 5 == 0 or preload_streak >= 1
+        ):
             print(
                 "   adaptive preload "
                 f"step={settle_index + 1}, target={hold_target}, "
@@ -1822,11 +1829,9 @@ def close_gripper_slowly(
     final_residuals = np.maximum(final_feedback - hold_target, 0.0)
     final_residual = float(np.min(final_residuals))
     final_efforts = get_gripper_joint_efforts()
-    effort_feedback_available = np.all(np.isfinite(final_efforts))
-    # Evaluate each independent finger using every physical feedback channel.
-    # One DACH jaw can report a near-zero effort while its position drive is
-    # visibly blocked by the object; discarding that residual whenever the
-    # effort array exists creates a false one-finger failure.
+    # Evaluate both independent fingers together.  A single force spike must
+    # not be accepted as a grasp when the opposite finger has no comparable
+    # physical support.
     final_finger_contacts = final_opening_ready & classify_finger_contacts(
         final_feedback,
         hold_target,
@@ -1834,7 +1839,16 @@ def close_gripper_slowly(
         residual_threshold=GRIPPER_CONTACT_PRELOAD_RESIDUAL,
         force_threshold=GRIPPER_CONTACT_FORCE_THRESHOLD,
     )
-    contact_confirmed = bool(np.all(final_finger_contacts))
+    final_contact_stability = evaluate_grasp_stability(
+        final_finger_contacts,
+        final_efforts,
+        final_residuals,
+        force_threshold=GRIPPER_CONTACT_FORCE_THRESHOLD,
+        residual_threshold=GRIPPER_CONTACT_PRELOAD_RESIDUAL,
+    )
+    contact_confirmed = bool(
+        final_opening_ready and final_contact_stability["stable"]
+    )
     return {
         "contact_confirmed": contact_confirmed,
         "finger_contacts": np.asarray(final_finger_contacts, dtype=bool),
@@ -1847,6 +1861,7 @@ def close_gripper_slowly(
         "maximum_contact_opening_width_m": maximum_contact_opening_width,
         "minimum_physical_opening_width_m": minimum_physical_opening_width,
         "geometry_limited": geometry_limited,
+        "contact_stability": final_contact_stability,
     }
 
 def open_gripper_slowly(
@@ -1868,7 +1883,7 @@ def open_gripper_slowly(
         state.dach_arm.gripper.set_joint_positions(finger_positions)
         hold_ee_target(hold_position, orientation)
         step_app()
-        if i % 15 == 0:
+        if VERBOSE_MOTION_LOG and i % 15 == 0:
             print(f"   open step={i}, finger_pos={state.dach_arm.gripper.get_joint_positions()}")
     # The interpolation duration controls command smoothness, not physical
     # convergence.  With the finite-effort jaw drives, 18-30 ramp frames can
@@ -1899,10 +1914,7 @@ def open_gripper_slowly(
         hold_ee_target(hold_position, orientation)
         step_app()
     final_error = float(np.max(np.abs(final_feedback - target_positions)))
-    print(
-        f"✋ 夹爪张开收敛: feedback={final_feedback}, "
-        f"target={target_positions}, error={final_error:.4f} m"
-    )
+    print(f"✋ 夹爪张开收敛: error={final_error:.4f} m")
     return {
         "feedback": final_feedback.copy(),
         "target": target_positions.copy(),
