@@ -45,6 +45,95 @@ def select_continuation_start(
     return commanded.copy()
 
 
+class JointTargetRateLimiter:
+    """Limit joint target rate and acceleration around live feedback."""
+
+    def __init__(
+        self,
+        max_step_rad: float,
+        max_step_delta_rad: float | None = None,
+        tracking_reset_error_rad: float | None = None,
+    ) -> None:
+        self.max_step_rad = max(float(max_step_rad), 1e-6)
+        self.max_step_delta_rad = (
+            None
+            if max_step_delta_rad is None
+            else max(float(max_step_delta_rad), 1e-6)
+        )
+        self.tracking_reset_error_rad = (
+            max(
+                float(tracking_reset_error_rad),
+                self.max_step_rad,
+            )
+            if tracking_reset_error_rad is not None
+            else 3.0 * self.max_step_rad
+        )
+        self.command = None
+        self.previous_step = None
+
+    def reset(self, position) -> np.ndarray:
+        position = self._finite_vector(position)
+        self.command = position.copy()
+        self.previous_step = np.zeros_like(position)
+        return self.command.copy()
+
+    def update(self, target, measured_position=None) -> np.ndarray:
+        target = self._finite_vector(target)
+        if self.command is None:
+            return self.reset(
+                target if measured_position is None else measured_position
+            )
+        if target.shape != self.command.shape:
+            raise ValueError(
+                f"Joint target has shape {target.shape}; "
+                f"expected {self.command.shape}"
+            )
+
+        measured = None
+        if measured_position is not None:
+            try:
+                measured = self._finite_vector(measured_position)
+            except (TypeError, ValueError):
+                measured = None
+            if measured is not None and measured.shape != self.command.shape:
+                measured = None
+
+        anchor = self.command
+        if measured is not None:
+            tracking_error = float(np.max(np.abs(measured - self.command)))
+            if tracking_error > self.tracking_reset_error_rad:
+                # A stale command must not keep pulling against a lagging or
+                # externally corrected articulation.
+                anchor = measured
+                self.previous_step = np.zeros_like(measured)
+
+        desired_step = target - anchor
+        if (
+            self.max_step_delta_rad is not None
+            and self.previous_step is not None
+        ):
+            desired_step = self.previous_step + np.clip(
+                desired_step - self.previous_step,
+                -self.max_step_delta_rad,
+                self.max_step_delta_rad,
+            )
+        step = np.clip(
+            desired_step,
+            -self.max_step_rad,
+            self.max_step_rad,
+        )
+        self.command = anchor + step
+        self.previous_step = step.copy()
+        return self.command.copy()
+
+    @staticmethod
+    def _finite_vector(value) -> np.ndarray:
+        vector = np.asarray(value, dtype=float).reshape(-1)
+        if vector.size == 0 or not np.all(np.isfinite(vector)):
+            raise ValueError("Joint position must be a finite non-empty vector")
+        return vector
+
+
 class SparseKeyposeDiffuser:
     """Diffuses sparse Cartesian or joint keyposes into smooth dense paths."""
 

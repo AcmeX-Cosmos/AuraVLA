@@ -45,7 +45,9 @@ from aura_isaac_bridge.core.state import (
     DACH_PATH_CLEARANCE,
     TRAJECTORY_MAX_JOINT_STEP, TRAJECTORY_MIN_FRAMES, TRAJECTORY_SETTLE_FRAMES,
     GRASP_APPROACH_MAX_JOINT_STEP, GRASP_APPROACH_MIN_FRAMES,
+    GRASP_APPROACH_MAX_STEP_DELTA,
     GRASP_LIFT_MAX_JOINT_STEP, GRASP_LIFT_MIN_FRAMES,
+    GRASP_LIFT_MAX_STEP_DELTA, GRASP_LIFT_SETTLE_FRAMES,
     CARTESIAN_WAYPOINT_SPACING, CARRY_APEX_CLEARANCE,
     TRANSPORT_LIFT_HEIGHT, CARRY_CARTESIAN_WAYPOINT_SPACING,
     CARRY_MAX_JOINT_STEP, CARRY_MIN_FRAMES,
@@ -399,6 +401,7 @@ def align_physical_closing_axis_at_hover(
             monitor_table_clearance=True,
             max_joint_step_rad=0.01,
             minimum_frames=24,
+            max_joint_step_delta_rad=GRASP_APPROACH_MAX_STEP_DELTA,
         )
     physical = np.asarray(get_gripper_closing_axis(), dtype=float)[:2]
     physical /= max(float(np.linalg.norm(physical)), 1e-9)
@@ -450,18 +453,17 @@ def adjust_object_grasp_position(
     object_long_axis = np.array(
         [-object_short_axis[1], object_short_axis[0]], dtype=float
     )
-    mesh_center = get_mesh_center(get_current_stage(), object_prim_path)
+    # Use the live collision-aligned bbox as the neutral grasp center. Vertex
+    # means are not physical centers for asymmetric meshes such as bananas or
+    # labeled cans and can bias the jaw by several millimeters.
+    geometry_center = bbox_center.copy()
     long_axis_offset = float(
-        np.dot(source_xy - mesh_center[:2], object_long_axis)
+        np.dot(source_xy - geometry_center[:2], object_long_axis)
     )
-    mesh_center_long = float(
-        np.dot(mesh_center[:2], object_long_axis)
-    )
-    source_long = mesh_center_long + float(
-        np.clip(long_axis_offset, -0.02, 0.02)
-    )
+    geometry_center_long = float(np.dot(geometry_center[:2], object_long_axis))
+    source_long = geometry_center_long + float(np.clip(long_axis_offset, -0.02, 0.02))
     collision_short_center = float(
-        np.dot(mesh_center[:2], object_short_axis)
+        np.dot(geometry_center[:2], object_short_axis)
     )
     adjusted_position[:2] = (
         object_long_axis * source_long
@@ -481,7 +483,7 @@ def adjust_object_grasp_position(
     )
     print(
         f"🎯 {object_name} 感知/场景抓取点: "
-        f"mesh_center_xy={mesh_center[:2]}, "
+        f"geometry_center_xy={geometry_center[:2]}, "
         f"bbox_center_xy={bbox_center[:2]}, "
         f"source_xy={source_xy}, "
         f"target_xy={adjusted_position[:2]}, "
@@ -1377,10 +1379,9 @@ def execute_pick_place(object_name, target_name, _reacquire_attempt=0):
         )
         object_position[2] += DACH_GRASP_HEIGHT_OFFSET
     grasp_target_center = np.asarray(object_position, dtype=float).copy()
-    # The selected backend and its camera-frame calibration remain the grasp source.
-    # Its selected pinch point can still carry a small object-specific lateral
-    # residual.  Use the live collision geometry only as a bounded final
-    # containment guard, so closing never begins with the object beside a jaw.
+    # The selected backend supplies the long-axis pinch location, while live
+    # USD geometry owns the short-axis center. This removes camera/model
+    # lateral bias before the jaws descend and keeps the policy generic.
     physical_alignment_center = grasp_target_center.copy()
     if grasp_position_active:
         bbox_center_array = np.asarray(bbox_center, dtype=float)
@@ -1407,22 +1408,30 @@ def execute_pick_place(object_name, target_name, _reacquire_attempt=0):
             <= bbox_max_array[2] + grasp_vertical_margin
         )
         if grasp_xy_in_bounds and grasp_z_in_bounds:
-            section_center = get_current_mesh_horizontal_cross_section_center(
-                get_current_stage(),
-                target_prim,
-                physical_alignment_center[:2],
-                object_prim_path,
+            live_short_axis = get_current_mesh_horizontal_min_width_axis(
+                get_current_stage(), target_prim, object_prim_path
+            )
+            live_short_axis = np.asarray(live_short_axis, dtype=float)[:2]
+            live_short_axis /= max(float(np.linalg.norm(live_short_axis)), 1e-9)
+            live_long_axis = np.array(
+                [-live_short_axis[1], live_short_axis[0]], dtype=float
+            )
+            grasp_long_offset = float(
+                np.dot(
+                    physical_alignment_center[:2] - bbox_center_array[:2],
+                    live_long_axis,
+                )
+            )
+            grasp_long_offset = float(np.clip(grasp_long_offset, -0.02, 0.02))
+            geometry_alignment_center = bbox_center_array[:2] + (
+                live_long_axis * grasp_long_offset
             )
             section_correction = (
-                np.asarray(section_center, dtype=float)
-                - physical_alignment_center[:2]
+                geometry_alignment_center - physical_alignment_center[:2]
             )
             section_correction_norm = float(np.linalg.norm(section_correction))
-            if section_correction_norm <= GRASP_MAX_PLANAR_CORRECTION:
-                physical_alignment_center[:2] = section_center
-            containment_xy_error = (
-                bbox_center_array[:2] - physical_alignment_center[:2]
-            )
+            physical_alignment_center[:2] = geometry_alignment_center
+            containment_xy_error = bbox_center_array[:2] - physical_alignment_center[:2]
             containment_xy_error_norm = float(np.linalg.norm(containment_xy_error))
             physical_alignment_center[2] = grasp_target_center[2]
             grasp_target_center = physical_alignment_center.copy()
@@ -1431,7 +1440,7 @@ def execute_pick_place(object_name, target_name, _reacquire_attempt=0):
             print(
                 f"📐 {GRASP_BACKEND} 抓取点局部截面校正: "
                 f"correction={section_correction_norm:.4f} m, "
-                f"applied={section_correction_norm <= GRASP_MAX_PLANAR_CORRECTION}"
+                "applied=True, source=live_bbox_short_axis_center"
             )
             print(
                 f"📐 {GRASP_BACKEND} 抓取点物理包含校正: "
@@ -1905,6 +1914,9 @@ def execute_pick_place(object_name, target_name, _reacquire_attempt=0):
             orientation=grasp_motion_orientation,
             gripper_positions=gripper_open_target,
             monitor_table_clearance=True,
+            max_joint_step_rad=GRASP_APPROACH_MAX_JOINT_STEP,
+            minimum_frames=GRASP_APPROACH_MIN_FRAMES,
+            max_joint_step_delta_rad=GRASP_APPROACH_MAX_STEP_DELTA,
         )
         if not hover_alignment_reached:
             move_robot_home(frames=90)
@@ -2083,6 +2095,9 @@ def execute_pick_place(object_name, target_name, _reacquire_attempt=0):
             orientation=grasp_motion_orientation,
             gripper_positions=gripper_open_target,
             monitor_table_clearance=True,
+            max_joint_step_rad=GRASP_APPROACH_MAX_JOINT_STEP,
+            minimum_frames=GRASP_APPROACH_MIN_FRAMES,
+            max_joint_step_delta_rad=GRASP_APPROACH_MAX_STEP_DELTA,
         )
         if not refinement_reached:
             move_robot_home(frames=90)
@@ -2131,6 +2146,9 @@ def execute_pick_place(object_name, target_name, _reacquire_attempt=0):
                 orientation=grasp_motion_orientation,
                 gripper_positions=gripper_open_target,
                 monitor_table_clearance=True,
+                max_joint_step_rad=GRASP_APPROACH_MAX_JOINT_STEP,
+                minimum_frames=GRASP_APPROACH_MIN_FRAMES,
+                max_joint_step_delta_rad=GRASP_APPROACH_MAX_STEP_DELTA,
             ):
                 live_finger_midpoint = get_gripper_finger_midpoint()
                 desired_planar_center = np.asarray(
@@ -2190,6 +2208,9 @@ def execute_pick_place(object_name, target_name, _reacquire_attempt=0):
             orientation=grasp_motion_orientation,
             gripper_positions=gripper_open_target,
             monitor_table_clearance=True,
+            max_joint_step_rad=GRASP_APPROACH_MAX_JOINT_STEP,
+            minimum_frames=GRASP_APPROACH_MIN_FRAMES,
+            max_joint_step_delta_rad=GRASP_APPROACH_MAX_STEP_DELTA,
         )
         live_clearance = float(get_gripper_table_clearance())
         if not insertion_reached or live_clearance > target_clearance + 0.006:
@@ -2284,6 +2305,7 @@ def execute_pick_place(object_name, target_name, _reacquire_attempt=0):
             monitor_table_clearance=False,
             max_joint_step_rad=GRASP_APPROACH_MAX_JOINT_STEP,
             minimum_frames=GRASP_APPROACH_MIN_FRAMES,
+            max_joint_step_delta_rad=GRASP_APPROACH_MAX_STEP_DELTA,
         )
         grasp_position = get_rmp_ee_position().copy()
         preclose_table_clearance = float(get_gripper_table_clearance())
@@ -2425,8 +2447,9 @@ def execute_pick_place(object_name, target_name, _reacquire_attempt=0):
         f"finger_midpoint={get_gripper_finger_midpoint()}, "
         f"jaw={state.dach_arm.gripper.get_joint_positions()}"
     )
-    for _ in range(5):
+    for _ in range(GRASP_LIFT_SETTLE_FRAMES):
         hold_ee_target(grasp_position, grasp_motion_orientation)
+        state.dach_arm.gripper.set_joint_positions(gripper_close_target)
         step_app()
 
     # Build one vertical lift waypoint from the settled live TCP, not the
@@ -2448,6 +2471,7 @@ def execute_pick_place(object_name, target_name, _reacquire_attempt=0):
         gripper_positions=gripper_close_target,
         max_joint_step_rad=GRASP_LIFT_MAX_JOINT_STEP,
         minimum_frames=GRASP_LIFT_MIN_FRAMES,
+        max_joint_step_delta_rad=GRASP_LIFT_MAX_STEP_DELTA,
         cartesian_waypoint_limit=1,
         cartesian_path_samples=20,
     )

@@ -4,6 +4,7 @@ import numpy as np
 
 from aura_isaac_bridge.robot.motion_planner import (
     DiffusionConfig,
+    JointTargetRateLimiter,
     SparseKeyposeDiffuser,
     compute_payload_tracking_state,
     container_place_candidates,
@@ -87,6 +88,54 @@ class SparseKeyposeDiffuserTest(unittest.TestCase):
         np.testing.assert_allclose(expected, [0.22, -0.56, 0.14])
         self.assertAlmostEqual(error, np.hypot(0.005, 0.008))
         np.testing.assert_allclose(offset, [-0.005, -0.008, -0.23])
+
+
+class JointTargetRateLimiterTest(unittest.TestCase):
+    def test_limits_step_and_step_change(self):
+        limiter = JointTargetRateLimiter(
+            max_step_rad=0.10,
+            max_step_delta_rad=0.02,
+        )
+        limiter.reset(np.array([0.0]))
+
+        first = limiter.update(np.array([0.1]))
+        second = limiter.update(np.array([0.1]))
+        third = limiter.update(np.array([0.1]))
+
+        np.testing.assert_allclose([first[0], second[0], third[0]], [0.02, 0.06, 0.10])
+        self.assertLessEqual(abs(second[0] - first[0]), 0.10)
+        self.assertLessEqual(abs((third[0] - second[0]) - (second[0] - first[0])), 0.02)
+
+    def test_resets_from_feedback_when_command_is_stale(self):
+        limiter = JointTargetRateLimiter(
+            max_step_rad=0.05,
+            max_step_delta_rad=0.01,
+            tracking_reset_error_rad=0.10,
+        )
+        limiter.reset(np.array([0.0]))
+        limiter.update(np.array([0.2]))
+
+        command = limiter.update(
+            np.array([0.3]),
+            measured_position=np.array([-0.5]),
+        )
+
+        self.assertAlmostEqual(command[0], -0.49)
+
+    def test_invalid_feedback_falls_back_to_previous_command(self):
+        limiter = JointTargetRateLimiter(
+            max_step_rad=0.05,
+            max_step_delta_rad=0.02,
+        )
+        limiter.reset(np.array([0.0]))
+
+        command = limiter.update(
+            np.array([0.2]),
+            measured_position=np.array([np.nan]),
+        )
+
+        self.assertTrue(np.isfinite(command[0]))
+        self.assertLessEqual(command[0], 0.05)
 
 
 if __name__ == "__main__":

@@ -192,10 +192,20 @@ robot:
   trajectory_settle_frames: 3
   grasp_approach_max_joint_step_rad: 0.009
   grasp_approach_min_frames: 30
+  grasp_approach_max_step_delta_rad: 0.0015
+  # Keep the final fixed-orientation descent sparse; RRT and clearance checks
+  # still protect the route, while fewer Cartesian samples reduce wrist kicks.
+  grasp_approach_cartesian_waypoints: 2
   # Use a low-acceleration initial lift so curved friction-held payloads do not
   # slip before the transport controller reaches steady motion.
   grasp_lift_max_joint_step_rad: 0.012
   grasp_lift_min_frames: 60
+  grasp_lift_max_step_delta_rad: 0.0012
+  grasp_lift_settle_frames: 12
+  # Limit jaw target rate below the contact residual so servo lag is not
+  # mistaken for contact and curved payloads are not pushed out of the grasp.
+  gripper_max_command_step_m: 0.001
+  gripper_max_command_step_delta_m: 0.00025
   action_waypoint_limit: 3
   cartesian_waypoint_spacing_m: 0.04
   transport_lift_height_m: 0.16

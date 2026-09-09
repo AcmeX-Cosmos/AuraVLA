@@ -268,6 +268,10 @@ GRASP_APPROACH_ORIENTATION_KEYFRAMES = max(
     int(os.environ.get("AURA_GRASP_APPROACH_ORIENTATION_KEYFRAMES", "10")),
     4,
 )
+GRASP_APPROACH_CARTESIAN_WAYPOINTS = max(
+    int(os.environ.get("AURA_GRASP_APPROACH_CARTESIAN_WAYPOINTS", "2")),
+    1,
+)
 GRASP_APPROACH_ROLL_CANDIDATES_DEG = tuple(
     float(value)
     for value in json.loads(
@@ -307,6 +311,14 @@ GRASP_LOW_POSE_CORRECTION_LIMIT = max(
 GRASP_CLEARANCE_GUARD_PAD = max(
     float(os.environ.get("AURA_GRASP_CLEARANCE_GUARD_PAD", "0.001")),
     0.0,
+)
+GRIPPER_MAX_COMMAND_STEP = max(
+    float(os.environ.get("AURA_GRIPPER_MAX_COMMAND_STEP_M", "0.001")),
+    1e-5,
+)
+GRIPPER_MAX_COMMAND_STEP_DELTA = max(
+    float(os.environ.get("AURA_GRIPPER_MAX_COMMAND_STEP_DELTA_M", "0.00025")),
+    1e-6,
 )
 VERBOSE_MOTION_LOG = os.environ.get(
     "AURA_VERBOSE_MOTION_LOG",
@@ -351,11 +363,23 @@ TRAJECTORY_MIN_FRAMES = max(int(os.environ.get("AURA_TRAJECTORY_MIN_FRAMES", "6"
 TRAJECTORY_SETTLE_FRAMES = max(int(os.environ.get("AURA_TRAJECTORY_SETTLE_FRAMES", "4")), 0)
 GRASP_APPROACH_MAX_JOINT_STEP = max(float(os.environ.get("AURA_GRASP_APPROACH_MAX_JOINT_STEP", "0.018")), 0.001)
 GRASP_APPROACH_MIN_FRAMES = max(int(os.environ.get("AURA_GRASP_APPROACH_MIN_FRAMES", "24")), 4)
+GRASP_APPROACH_MAX_STEP_DELTA = max(
+    float(os.environ.get("AURA_GRASP_APPROACH_MAX_STEP_DELTA", "0.0015")),
+    0.0001,
+)
 GRASP_LIFT_MAX_JOINT_STEP = max(
     float(os.environ.get("AURA_GRASP_LIFT_MAX_JOINT_STEP", "0.03")), 0.001
 )
 GRASP_LIFT_MIN_FRAMES = max(
     int(os.environ.get("AURA_GRASP_LIFT_MIN_FRAMES", "20")), 20
+)
+GRASP_LIFT_MAX_STEP_DELTA = max(
+    float(os.environ.get("AURA_GRASP_LIFT_MAX_STEP_DELTA", "0.0012")),
+    0.0001,
+)
+GRASP_LIFT_SETTLE_FRAMES = max(
+    int(os.environ.get("AURA_GRASP_LIFT_SETTLE_FRAMES", "12")),
+    4,
 )
 ACTION_WAYPOINT_LIMIT = max(int(os.environ.get("AURA_ACTION_WAYPOINT_LIMIT", "3")), 1)
 CARTESIAN_WAYPOINT_SPACING = max(float(os.environ.get("AURA_CARTESIAN_WAYPOINT_SPACING", "0.04")), 0.01)
