@@ -39,6 +39,10 @@ and Isaac Sim physics-based execution.
 
 ## Features
 
+For optional SO101 banana-to-box simulation recording, LeRobot dataset export,
+and ACT training, see [aura_lerobot/README.md](aura_lerobot/README.md).
+Keyboard and SO101 Leader control are documented in [teleoperation](aura_lerobot/teleoperation.md).
+
 - **Vision-Language Scene Understanding**: Leverages state-of-the-art VLM to interpret natural language instructions and analyze visual scenes for intelligent task comprehension
 - **Schema-Validated Task Planning**: Automatic task decomposition with JSON schema validation, forbidden motion command detection, and safety constraint enforcement
 - **Robust Robot Execution**: File-based Isaac Sim communication protocol with progress monitoring, timeout handling, and error recovery mechanisms

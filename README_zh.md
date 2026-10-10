@@ -32,6 +32,10 @@ AuraVLA 是一个具身AI系统，实现了机器人操作任务的闭环感知-
 
 ## 核心特性
 
+SO101 的香蕉入盒仿真数据采集、LeRobot 导出及 ACT 训练步骤见
+[aura_lerobot/README.md](aura_lerobot/README.md)。场景由用户自行配置，采集模块独立运行。
+键盘及 SO101 Leader 遥操作步骤见 [遥操作说明](aura_lerobot/teleoperation.md)。
+
 - **视觉-语言场景理解**：利用先进的VLM解释自然语言指令并分析视觉场景，实现智能任务理解
 - **Schema验证的任务规划**：自动任务分解，支持JSON schema验证、禁止危险运动指令检测和安全约束强制执行
 - **鲁棒的机器人执行**：基于文件的Isaac Sim通信协议，具有进度监控、超时处理和错误恢复机制

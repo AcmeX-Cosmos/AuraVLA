@@ -1,0 +1,52 @@
+# Copy to so101_banana.local.yaml. Paths/poses below are examples, not scene edits.
+stage_path: ""  # Required: absolute path to YOUR configured USD scene
+robot:
+  prim_path: /World/SO101
+  # USD joint names in proximal-to-distal order. Change values to match your import.
+  joint_names: [shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper]
+  # Rigid link carrying the FIXED finger, not the moving gripper jaw.
+  end_effector_path: /World/SO101/gripper_link
+  tcp_offset_m: [0.0, 0.0, 0.0]  # Link-local grasp center between the fingers
+  tool_axis: [0.0, 0.0, 1.0]  # Link-local approach axis; must point toward the banana
+  home_rad: [0.0, -0.5, 1.0, 0.8, 0.0]  # Must be calibrated to your scene
+  gripper_open_rad: 0.8
+  gripper_closed_rad: 0.0
+  max_joint_velocity_rad_s: 0.6
+camera:
+  prim_path: /World/Camera  # Existing camera, created/configured by you
+  resolution: [256, 256]  # [width, height]; RGB recorded as HWC uint8
+task:
+  banana_path: /World/banana  # Must be the dynamic rigid-body root
+  box_path: /World/box
+  # INTERIOR bounds in box-local meters, including usable height below the rim.
+  # Measure these in your scene. Do not use the outside mesh bounds.
+  box_inner_bounds_m: [[-0.08, -0.06, 0.01], [0.08, 0.06, 0.10]]
+  grasp_offset_m: [0.0, 0.0, 0.0]  # Offset from banana bbox center, world axes
+  approach_direction: [0.0, 0.0, -1.0]  # World axes, SO101's five DOFs constrain orientation
+  hover_height_m: 0.08
+  lift_height_m: 0.12
+  drop_clearance_m: 0.02
+  minimum_object_lift_m: 0.035
+  maximum_carry_slip_m: 0.03
+  segment_seconds: 1.5
+  gripper_seconds: 0.8
+  settle_seconds: 1.5
+  success_hold_seconds: 0.5
+  success_max_speed_m_s: 0.02
+  # Randomize banana reset XY only, between episodes. Start at zero for calibration.
+  reset_xy_jitter_m: [0.0, 0.0]
+recording:
+  root: data/so101_banana_raw
+  fps: 30
+  physics_hz: 120
+  episodes: 100  # Successful episodes; CLI --episodes 0 means repeat until Ctrl+C
+  max_consecutive_failures: 5
+  seed: 42
+  task: "Pick up the banana from the table and place it inside the box."
+teleoperation:
+  translation_speed_m_s: 0.04
+  wrist_speed_rad_s: 0.4
+  remote_timeout_seconds: 0.5
+  # Optional five [target_at_minus_100, target_at_plus_100] pairs in radians.
+  # null maps the arm to the USD joint limits. Reverse a pair to reverse a joint.
+  arm_range_rad: null

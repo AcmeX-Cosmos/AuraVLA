@@ -3,6 +3,10 @@ build/
 install/
 log/
 
+# Local simulation demonstrations, exported datasets and ACT checkpoints
+data/
+outputs/
+
 # Python
 __pycache__/
 *.py[cod]
