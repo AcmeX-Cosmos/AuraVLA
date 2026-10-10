@@ -39,17 +39,18 @@ and Isaac Sim physics-based execution.
 
 ## Features
 
+1. **Vision-Language Scene Understanding**: Uses a VLM to interpret natural language instructions and understand visual scenes
+2. **Schema-Validated Task Planning**: Decomposes tasks with JSON schema validation and safety constraints
+3. **Selectable Grasp Backends**: Supports configurable AnyGrasp and GraspNet grasp estimation
+4. **Closed-Loop Execution and Verification**: Coordinates robot execution, result verification, and automatic replanning
+5. **SO101 Simulation Data Collection**: Repeats banana pick-and-place cycles with automatic reset and successful demonstration recording
+6. **Keyboard and Leader Teleoperation**: Supports keyboard and leisaac-compatible SO101 Leader control with demonstration recording
+7. **Synchronized Vision and Actions**: Records synchronized RGB images, measured joint states, and control targets
+8. **LeRobot and ACT Integration**: Exports LeRobot datasets and provides ACT training instructions
+
 For optional SO101 banana-to-box simulation recording, LeRobot dataset export,
 and ACT training, see [aura_lerobot/README.md](aura_lerobot/README.md).
 Keyboard and SO101 Leader control are documented in [teleoperation](aura_lerobot/teleoperation.md).
-
-- **Vision-Language Scene Understanding**: Leverages state-of-the-art VLM to interpret natural language instructions and analyze visual scenes for intelligent task comprehension
-- **Schema-Validated Task Planning**: Automatic task decomposition with JSON schema validation, forbidden motion command detection, and safety constraint enforcement
-- **Robust Robot Execution**: File-based Isaac Sim communication protocol with progress monitoring, timeout handling, and error recovery mechanisms
-- **Geometric Result Verification**: Automated task completion checking through geometric validation and spatial relationship analysis
-- **Closed-Loop Orchestration**: Self-correcting control system with automatic replanning, state machine management, and configurable retry strategies
-- **Selectable Grasp Backends**: Switch between AnyGrasp and GraspNet through `config.yaml` without changing the task execution pipeline
-- **Physics-Based Verification**: Requires real finger contact, object lift, stable transport, and verified placement; it does not use FixedJoint attachment
 
 ---
 
